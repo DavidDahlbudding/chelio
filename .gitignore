@@ -1,0 +1,10 @@
+/output/*
+
+/helios_inputs/*
+!/helios_inputs/param.dat
+!/helios_inputs/species.dat
+
+/ggchem_inputs/*
+!/ggchem_inputs/param.in
+
+nohup.out
