@@ -8,24 +8,8 @@ CO            yes             yes                file
 
 CH4           yes             no                 file
 
-NH3           yes             no                 file
-
-HCN           yes             no                 file
-
-PH3           yes             no                 file
-
 C2H2          yes             no                 file
-
-H2S           yes             no                 file
-
-Na            yes             no                 file
-
-K             yes             no                 file
 
 H2            no	          yes                file
 
-He            no              yes                file
-
 CIA_H2H2      yes             no                 file
-
-CIA_H2He      yes             no                 file

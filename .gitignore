@@ -7,4 +7,6 @@
 /ggchem_inputs/*
 !/ggchem_inputs/param.in
 
+/analyze/images/*
+
 nohup.out

@@ -13,30 +13,30 @@ See online documentation for a detailed explanation of each parameter --> https:
                                                
 === === GENERAL === ===
 
-name =                                                benchmark                      [any string]                                 (CL: Y)
-output directory =                                    ../couple_ggchem/output/         [directory path]                             (CL: Y)
+name =                                                test                            [any string]                                 (CL: Y)
+output directory =                                    ../chelio/output/               [directory path]                             (CL: Y)
 realtime plotting =                                   no                              [yes, no, number > 0]                        (CL: Y)
-planet type =                                         gas                           [rocky, gas, no_atmosphere]                  (CL: Y)
+planet type =                                         rocky                           [rocky, gas, no_atmosphere]                  (CL: Y)
 
 === === GRID === ===
 
-TOA pressure [10^-6 bar] =                            1e-1                             [number > 0]                                 (CL: Y)
-BOA pressure [10^-6 bar] =                            1e9                             [number > 0]                                 (CL: Y)
+TOA pressure [10^-6 bar] =                            1e-1                            [number > 0]                                 (CL: Y)
+BOA pressure [10^-6 bar] =                            1e7                             [number > 0]                                 (CL: Y)
 
 === === ITERATION === ===
 
 run type =                                            iterative                       [iterative, post-processing]                 (CL: Y)
-  post-proc. --> path to temperature file =           ./output/h2-h2o-co2/h2o=1e-03_co2=1e-04_Tint=150K_P0=10bar_A=01/h2o=1e-03_co2=1e-04_Tint=150K_P0=10bar_A=01_tp.dat             [file path]                                  (CL: Y)
-  post-proc. --> temperature file format =            PT (bar)                        [helios, TP (bar), PT (bar)]                 (CL: N)
+  post-proc. --> path to temperature file =           ../chelio/ggchem_inputs/pt_helios.in             [file path]                                  (CL: Y)
+  post-proc. --> temperature file format =            PT bar                        [helios, TP (bar), PT (bar)]                 (CL: N)
 
 === === RADIATION === ===
 
 scattering =                                          yes                             [yes, no]                                    (CL: Y)
 direct irradiation beam =                             no                              [yes, no]                                    (CL: Y)
-  no  --> f factor =                                  0.5                             [number: 0.25 - 1]                           (CL: Y)
+  no  --> f factor =                                  0.25                            [number: 0.25 - 1]                           (CL: Y)
   yes --> stellar zenith angle [deg] =                60                              [number: 0 - 89]                             (CL: Y)
-internal temperature [K] =                            200                             [number > 0]                                 (CL: Y)
-surface albedo =                                      0.0                             [file, number: 0 - 1]                        (CL: Y)
+internal temperature [K] =                            100                             [number > 0]                                 (CL: Y)
+surface albedo =                                      0.1                             [file, number: 0 - 1]                        (CL: Y)
   file --> path to albedo file =                      ./input/albedo.dat              [path to file]                               (CL: Y)
   file --> albedo file format =                       2 Wavelength micron             [#skip, wavel.col., wavel.unit[micron,cm,m]] (CL: N)
   file --> surface name =                             Feldspathic                     [column with surface data]                   (CL: Y)
@@ -44,11 +44,11 @@ rocky planet --> use f approximation formula =        no                        
 
 === === OPACITY MIXING === ===
 
-opacity mixing =                                      on-the-fly                        [premixed, on-the-fly]                       (CL: Y)
+opacity mixing =                                      on-the-fly                      [premixed, on-the-fly]                       (CL: Y)
   premixed   --> path to opacity file =               ./ktable/output/r50_kdistr/h2o/mixed_opac_kdistr.h5  [file path]                                  (CL: Y)
-  on-the-fly --> path to species file =               ./input/species.dat             [file path]                                  (CL: Y)
+  on-the-fly --> path to species file =               ./helios_inputs/species.dat             [file path]                                  (CL: Y)
   on-the-fly --> file with vertical mixing ratios =   ./input/vmr_mix.txt             [file path]                                  (CL: Y)
-  on-the-fly --> vertical VMR file format =           0 Pbar bar                  [#skip, press.col., press.unit[cgs,Pa,bar]]  (CL: N)
+  on-the-fly --> vertical VMR file format =           0 Pbar bar                      [#skip, press.col., press.unit[cgs,Pa,bar]]  (CL: N)
   on-the-fly --> directory with FastChem files =      ./input/chemistry/lodders_m0/   [directory path]                             (CL: Y)
   on-the-fly --> directory with opacity files =       ./input/opacity/r50_kdistr/     [directory path]                             (CL: Y)
 
@@ -60,15 +60,15 @@ kappa value =                                         0.285714                  
 
 === === STELLAR AND PLANETARY PARAMETERS === ===
 
-stellar spectral model =                              file                       [blackbody, file]                            (CL: Y)
-  file --> path to stellar spectrum file =            ./star_tool/output/star_g5.h5            [file path]                                  (CL: Y)
-  file --> dataset in stellar spectrum file =         /r50_kdistr/phoenix/g5      [dataset]                                    (CL: Y)
+stellar spectral model =                              blackbody                       [blackbody, file]                            (CL: Y)
+  file --> path to stellar spectrum file =            ./input/star_2022.h5            [file path]                                  (CL: Y)
+  file --> dataset in stellar spectrum file =         /r50_kdistr/phoenix/gj1214      [dataset]                                    (CL: Y)
 planet =                                              manual                          [manual, name of planet]                     (CL: Y)
-  manual --> surface gravity [cm s^-2] =              1000                            [number > 0]                                 (CL: Y)
-  manual --> orbital distance [AU] =                  0.06591927                      [number > 0]                                 (CL: Y)
-  manual --> radius planet [R_Jup] =                  1.0                             [number > 0]                                 (CL: Y)
-  manual --> radius star [R_Sun] =                    0.977                           [number > 0]                                 (CL: Y)
-  manual --> temperature star [K] =                   5660                            [number >= 0]                                (CL: Y)
+  manual --> surface gravity [cm s^-2] =              981                             [number > 0]                                 (CL: Y)
+  manual --> orbital distance [AU] =                  0.01                            [number > 0]                                 (CL: Y)
+  manual --> radius planet [R_Jup] =                  0.089117                        [number > 0]                                 (CL: Y)
+  manual --> radius star [R_Sun] =                    0.1027                          [number > 0]                                 (CL: Y)
+  manual --> temperature star [K] =                   200                             [number >= 0]                                (CL: Y)
 
 === === CLOUDS === ===
 
@@ -88,7 +88,7 @@ cloud mixing ratio =                                  file                      
 
 coupling mode =                                       yes                             [yes, no]                                    (CL: Y)
   yes --> full output each iteration step =           no                              [yes, no]                                    (CL: Y)
-  yes --> force eq chem for first iteration =         yes                             [yes, no]                                    (CL: Y)
+  yes --> force eq chem for first iteration =         no                              [yes, no]                                    (CL: Y)
   yes --> coupling speed up =                         no                              [yes, no]                                    (CL: Y)
   yes --> coupling iteration step =                   0                               [number >= 0]                                (CL: Y)
 
@@ -109,11 +109,11 @@ geometric zenith angle correction =              automatic                  [aut
 flux calculation method =                        iteration                  [iteration, matrix]                                            (CL: Y)
 on-the-fly --> k coefficients mixing method =    RO                         [correlated-k, RO]                                             (CL: Y)
 energy budget correction =                       automatic                  [automatic, yes, no]                                           (CL: Y)
-convective damping parameter =                   automatic                  [automatic, number > 0]                                        (CL: Y)
+convective damping parameter =                   4.0                        [automatic, number > 0]                                        (CL: Y)
 plancktable dimension and stepsize =             8000          2            [two numbers > 0]                                              (CL: N)
-maximum number of iterations =                   10000                      [number > 0]                                                   (CL: Y)
-radiative equilibrium criterion =                1e-8                       [number > 0]                                                   (CL: Y)
-relax radiative criterion at =                   5e3   8e3                  [two numbers > 0]                                              (CL: N)
+maximum number of iterations =                   30000                      [number > 0]                                                   (CL: Y)
+radiative equilibrium criterion =                1e-6                       [number > 0]                                                   (CL: Y)
+relax radiative criterion at =                   1e4   2e4                  [two numbers > 0]                                              (CL: N)
 number of prerun timesteps =                     0                          [number >= 0]                                                  (CL: Y)
 physical timestep [s] =                          no                         [no, number > 0]                                               (CL: Y)
   number --> runtime limit [s] =                 86400                      [number > timestep]                                            (CL: Y)
@@ -122,4 +122,4 @@ include additional heating =                     no                         [yes
   yes --> path to heating file =                 ./input/heating_file.txt   [file path]                                                    (CL: Y)
   yes --> heating file format =                  1 Pressure cgs Heating 1e7 [#skip, press.col., press.unit[cgs,Pa,bar], data, cgs factor]  (CL: N)
 coupling --> write TP profile during run =       0                          [0 (=no), number > 0]                                                (CL: Y)
-coupling --> convergence criterion =             1e-4                       [number > 0]                                                   (CL: Y) 
+coupling --> convergence criterion =             1e-3                       [number > 0]                                                   (CL: Y) 
