@@ -32,13 +32,15 @@ if [ "$(basename "$PWD")" != "chelio" ]; then
     exit
 fi
 
-OUT_DIR=output/EqChem # relative to chelio directory
-NAME="Earth_P0=${BOA_P}_Tint=${TEMP}_NoCond_CplusO=${CplusO}_CtoO=${CtoO}" #_a_N=${a_N}
+OUT_DIR="output/test_newCIAs" # relative to chelio directory
+NAME="Earth_P0=${BOA_P}_Tint=${TEMP}_CplusO=${CplusO}_CtoO=${CtoO}" #_aN=${a_N}" #_A=${ALBEDO}"
 MIXFILE=vertical_mix
 
-# if file exists already exit with warning
-if [ -f "${OUT_DIR}/${NAME}/${NAME}_tp_coupling_${i_min}.dat" ]; then
-    echo "Output ${NAME}_tp_coupling_${i_min}.dat already exists"
+# if file MIXFILE_imin+1 exists already exit with warning
+# TODO: except if not yet converged!
+echo "${OUT_DIR}/${NAME}/${MIXFILE}_$(($i_min+1)).dat"
+if [ -f "${OUT_DIR}/${NAME}/${MIXFILE}_$(($i_min+1)).dat" ]; then
+    echo "Output ${NAME}/${MIXFILE}_$(($i_min+1)).dat already exists"
     exit
 fi
 
@@ -51,7 +53,8 @@ python3 source/calc_abundances.py --CplusO $CplusO --CtoO $CtoO --a_N $a_N
 #python3 source/calc_abundances_benchmark.py
 
 # get initial (isothermal) P-T-profile
-python3 source/create_pt.py --Teq $TEMP --Pmin $TOA_P --Pmax $BOA_P
+#python3 source/create_pt.py --Teq $TEMP --Pmin $TOA_P --Pmax $BOA_P
+python3 source/create_pt.py --Teq 500 --Pmin $TOA_P --Pmax $BOA_P # for EqCond start with higher T (such that not all species condense)
 
 # create output directory if it does not exist
 mkdir -p ${OUT_DIR}/${NAME}
@@ -80,7 +83,7 @@ coupling_speed_up="no"
 
 # run the iteration for a sufficient number of iterations (e.g., 10)
 # i_min defined above
-i_full=2
+i_full=4
 i_max=10
 
 for i in $(seq $i_min 1 $i_max)
@@ -149,6 +152,7 @@ do
 
     # copy new T(P) profile to GGchem
     cp $CHELIO_PATH/${OUT_DIR}/${NAME}/${NAME}_tp_coupling_$i.dat $GGCHEM_PATH/structures/pt_helios.in
+    #python $CHELIO_PATH/source/convert_tp.py $CHELIO_PATH/${OUT_DIR}/${NAME}/${NAME}_tp_coupling_$i.dat 20 # take max(Ti, 20K) for each layer
 
     # run GGchem
     cd $GGCHEM_PATH

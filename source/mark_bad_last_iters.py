@@ -8,8 +8,8 @@ params = np.array(['P0', 'Tint', 'CplusO', 'CtoO'])
 P0s = np.array([1e6, 1e7]) # surface pressure in dyn/cm^2
 Tints = np.array([100, 150, 200, 250, 300, 350]) # internal temperature in K
 
-CplusOs = np.array([1e-6, 3.16e-5, 1e-3, 3.16e-2, 1e0])
-CtoOs = np.array([0.1, 0.59, 1.2])
+CplusOs = np.array([1e-3, 3.16e-3, 1e-2, 3.16e-2, 1e-1, 3.16e-1, 1e0])
+CtoOs = np.array([0.1, 0.3, 0.59, 0.8, 1.0, 1.2])
 
 folder = '../output/EqChem/'
 
@@ -38,6 +38,7 @@ def extract_data(i_P0=0, i_Tint=0, i_CplusO=0, i_CtoO=0):
 
     path = folder + name + "/Static_Conc_{var}.dat"
     j = 0
+    max_nlay = 0
 
     while True:
         with warnings.catch_warnings():
@@ -48,6 +49,7 @@ def extract_data(i_P0=0, i_Tint=0, i_CplusO=0, i_CtoO=0):
                     # rename file
                     os.rename(path.format(var=f'{j}_bad'), path.format(var=j))
                 d = np.loadtxt(path.format(var=j), skiprows=3)
+                max_nlay = max(max_nlay, d.shape[0])
                 PTs.append(np.array([d[:,2]*1e-6, d[:,0]]).T) # convert pressure from dyn/cm^2 to bar
                 inds.append(j)
                 j += 1
@@ -55,6 +57,10 @@ def extract_data(i_P0=0, i_Tint=0, i_CplusO=0, i_CtoO=0):
                 if warn.__class__ == UserWarning:
                     print(f'!GGchem did not converge for {name}!')
                 break
+
+    for i, pt in enumerate(PTs):
+        if pt.shape[0] < max_nlay:
+            PTs[i] = np.pad(pt, ((0, max_nlay - pt.shape[0]), (0, 0)), mode='constant', constant_values=0)
 
     return name, np.array(inds), np.array(PTs)
 
@@ -73,6 +79,6 @@ for i in range(len(P0s)):
                         print('Differences: ', diff)
                         
                         # Rename files
-                        #os.rename(folder + name + f'/Static_Conc_{m}.dat', folder + name + f'/Static_Conc_{m}_bad.dat')
+                        os.rename(folder + name + f'/Static_Conc_{m}.dat', folder + name + f'/Static_Conc_{m}_bad.dat')
                     else:
                         break

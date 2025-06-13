@@ -11,8 +11,8 @@ dispol_WoitkeRefit.dat                  ! dispol_file3
 abund_helios.in
 
 # equilibrium condensation?
-.false.               ! model_eqcond
-.false.               ! remove_condensates
+.true.               ! model_eqcond
+.true.               ! remove_condensates
 
 # model options
 1                     ! model_dim  (0,1,2)

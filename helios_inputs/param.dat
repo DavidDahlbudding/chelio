@@ -13,7 +13,7 @@ See online documentation for a detailed explanation of each parameter --> https:
                                                
 === === GENERAL === ===
 
-name =                                                test                            [any string]                                 (CL: Y)
+name =                                                earth                           [any string]                                 (CL: Y)
 output directory =                                    ../chelio/output/               [directory path]                             (CL: Y)
 realtime plotting =                                   no                              [yes, no, number > 0]                        (CL: Y)
 planet type =                                         rocky                           [rocky, gas, no_atmosphere]                  (CL: Y)

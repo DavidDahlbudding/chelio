@@ -32,6 +32,12 @@ elif CplusO == 1.0:
     warnings.warn('\nWarning: CplusO cannot be 1. Corrected to (1 - 1e-9).\nChoose negative value to set CplusO = 1 - abs(CplusO).')
     CplusO = 1 - 1e-9
 
+if a_N < 0:
+    a_N = 1 - abs(a_N)
+elif a_N == 1.0:
+    warnings.warn('\nWarning: a_N cannot be 1. Corrected to (1 - 1e-9).\nChoose negative value to set a_N = 1 - abs(a_N).')
+    a_N = 1 - 1e-9
+
 a_H = (1 - a_N)
 a_H = a_H * (1 - CplusO)
 a_C = CtoO / (1 + CtoO) * (1 - a_N - a_H)

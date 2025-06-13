@@ -13,3 +13,7 @@ C2H2          yes             no                 file
 H2            no	          yes                file
 
 CIA_H2H2      yes             no                 file
+
+CIA_H2CH4     yes             no                 file
+
+CIA_CH4CH4    yes             no                 file
