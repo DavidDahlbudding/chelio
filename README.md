@@ -45,7 +45,7 @@ bash run_coupled.bash \
     --CtoO 0.59 \
     --a_N 1e-4
     # OUT_DIR defaults to "output", NAME defaults to "test"
-    # To specify: --OUT_DIR "output/my_single_run" --NAME "MySimulation_P1e7_T300"
+    # To specify, e.g.: --OUT_DIR "output/eqChem" --NAME "Earth_P0=1e7_Tint=200_CtoO=0.1"
 ```
 
 **Key Parameters (with defaults if not specified):**
@@ -58,8 +58,8 @@ bash run_coupled.bash \
 * `--CtoO`: Carbon-to-Oxygen ratio. Default: 0.59
 * `--a_N`: Nitrogen abundance. Default: 0.0
 * `--i_min`: Starting coupling iteration index (useful for resuming runs). Default: 0
-* `--OUT_DIR`: Path for the specific run's output directory (relative to `CHELIO_PATH`). This directory will be created if it doesn't exist. Default: "output"
-* `--NAME`: A unique name for this simulation, used for output file prefixes. Default: "test"
+* `--OUT_DIR`: Path for the general output directory (relative to `CHELIO_PATH`). This directory will be created if it doesn't exist. Default: "output"
+* `--NAME`: A unique name for this simulation, used for output directory of a specific run and file prefixes. Default: "test"
 
 ### Running a Parameter Grid Exploration
 
@@ -107,26 +107,6 @@ chelio/
     ├─ create_pt.py           # Creates initial P-T profiles
     └─ mark_bad_last_iters.py # Marks problematic iterations in output
 ```
-
----
-
-## How the Coupling Works
-
-The `run_coupled.bash` script orchestrates the iterative coupling between HELIOS and GGchem:
-
-1.  **Initialization**:
-    * `source/calc_abundances.py` generates an initial elemental abundance file for GGchem based on input C+O and C:O ratios.
-    * `source/create_pt.py` generates an initial (isothermal) Pressure-Temperature (P-T) profile for GGchem.
-    * GGchem is run with these initial inputs to calculate an equilibrium chemical composition.
-
-2.  **Coupling Loop**: The script enters a loop, typically running for 10-20 iterations or until convergence:
-    * `source/convert_mixfile.py` converts the chemical abundances calculated by GGchem into a format usable by HELIOS (the `vertical_mix.dat` file).
-    * HELIOS is executed with the current P-T profile (from the previous iteration or initial) and the new chemical mixing ratios. HELIOS calculates a new P-T profile.
-    * The newly calculated P-T profile from HELIOS is then fed back into GGchem.
-    * GGchem is run again to compute new chemical abundances based on the updated P-T profile.
-    * This cycle continues, with HELIOS and GGchem iteratively updating the atmosphere's P-T profile and chemical composition, respectively, until both converge to a self-consistent state.
-
-3.  **Convergence**: The loop typically breaks when a convergence criterion from HELIOS is met, or after a maximum number of iterations.
 
 ---
 
