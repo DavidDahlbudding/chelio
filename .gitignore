@@ -9,6 +9,7 @@
 
 /analyze/images/*
 
-nohup.out
-
 *.pyc
+
+nohup.out
+.filestructure
