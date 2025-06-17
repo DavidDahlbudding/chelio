@@ -8,6 +8,11 @@
 !/ggchem_inputs/param.in
 
 /analyze/images/*
+/analyze/analyze_habitability.ipynb
+/analyze/contributions+opacities.ipynb
+/analyze/opacity_contributions.ipynb
+/analyze/test_atmospheric_escape.ipynb
+/analyze/test_redoxState.ipynb
 
 *.pyc
 
