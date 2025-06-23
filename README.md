@@ -73,13 +73,32 @@ bash multiple_runs.bash
 
 ---
 
+## Analyzing Simulation Data
+
+The `analyze/` directory contains Jupyter notebooks for post-processing and visualizing simulation results. The analysis workflow is powered by the `analyze_modules` package, which provides a streamlined interface for loading and plotting data.
+
+The notebooks provide templates for common analysis tasks:
+
+1.  **IndividualRun:** Analyze the temperature and chemical profiles of an individual run.
+2.  **CompareTsurf+TimeinHZ:** Compare 1D surface temperature vs. a varying parameter and plot histograms of time spent in the habitable zone (valid for Earth-sized moons).
+3.  **TsurfMatrix:** Plot 2D matrices of surface temperature or other parameters as a function of chemical composition (C+O, C/O).
+4.  **CompareOther:** Create 1D comparison plots for various output parameters, such as surface mixing ratios vs. an input parameter.
+5.  **EscapeStatistics:** Generate histograms of the Jeans escape parameter and atmospheric escape timescales.
+
+---
+
 ## Project Structure
 
 ```
 chelio/
 ├─ README.md               # This file
-├─ analyze/                # Jupyter notebooks and generated images for post-processing and analysis
-│  ├─ Jupyter Notebooks ...
+├─ analyze/                # Analysis tools, notebooks, and figures
+│  ├─ 1_IndividualRun.ipynb
+│  ├─ ... (other notebooks)
+│  ├─ analyze_modules/      # Core package for data analysis
+│  │  ├─ __init__.py
+│  │  ├─ data_loader.py    # High-level functions for loading simulation data
+│  │  └─ plot_utils.py     # Reusable, high-level plotting functions
 │  ├─ images/
 │  │  ├─ ...
 ├─ ggchem_inputs/          # Template input files for GGchem
@@ -114,6 +133,6 @@ chelio/
 
 Accompanying paper:
 
-[Your Paper Title]
-[Your Authors]
-[Journal, Year, Volume, Pages/DOI]
+Habitability of Tidally Heated H$_2$-Dominated Exomoons around Free-Floating Planets
+Dahlbüdding et al. 2025
+[Journal, DOI]
