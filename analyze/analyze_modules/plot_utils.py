@@ -227,7 +227,7 @@ def plot_all_iteration_profiles(
         x_data, _ = _get_profile_data(data, chelio_run, param_key, mol_type)
         
         color = cmap(i / max(1, num_iters - 1))
-        label = f"Iteration {i}"
+        label = f"{i}"
         
         ax.plot(x_data, y_data, color=color, label=label, **kwargs)
     

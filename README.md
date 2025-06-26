@@ -2,6 +2,8 @@
 
 Chelio is a framework designed to couple the 1D radiative transfer code [HELIOS](https://github.com/exoclime/HELIOS) with the equilibrium chemistry code [GGchem](https://github.com/pw31/GGchem). It enables self-consistent atmospheric simulations by iteratively calculating temperature-pressure profiles and chemical compositions.
 
+This framework accompanies the paper "Habitability of Tidally Heated H$_2$-Dominated Exomoons around Free-Floating Planets" by Dahlbüdding et al. (subm.). The data produced by Chelio and presented in the paper are available on [Zenodo](https://doi.org/10.5281/zenodo.15738536).
+
 ---
 
 ## Getting Started
@@ -134,5 +136,5 @@ chelio/
 Accompanying paper:
 
 Habitability of Tidally Heated H$_2$-Dominated Exomoons around Free-Floating Planets
-Dahlbüdding et al. 2025
-[Journal, DOI]
+
+Dahlbüdding et al. (subm.)
