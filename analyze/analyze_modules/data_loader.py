@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 import warnings
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Callable
 
 # Utility functions for formatting run names, adapted from notebooks
 def _format_e_nums(num):
@@ -312,6 +312,7 @@ def load_parameter_sweep(
     varying_param_name: str, 
     varying_param_values: List[Any], 
     load_mode: str = 'last', 
+    build_name: Callable = _build_run_name,
     **kwargs
 ) -> List[ChelioRun]:
     """
@@ -326,7 +327,7 @@ def load_parameter_sweep(
         current_params[varying_param_name] = value
         current_params.update(kwargs)
         
-        run_name = _build_run_name(current_params)
+        run_name = build_name(current_params)
         run = ChelioRun(base_folder, run_name, load_mode=load_mode)
         run.read_data()
         runs.append(run)
@@ -342,6 +343,7 @@ def load_parameter_matrix(
     what_to_extract: str,
     load_mode: str = 'last',
     mol_type: str = 'mol',
+    build_name: Callable = _build_run_name,
     **kwargs
 ) -> np.ndarray:
     """
@@ -372,7 +374,7 @@ def load_parameter_matrix(
             current_params[param2_name] = p2_val
             current_params.update(kwargs)
 
-            run_name = _build_run_name(current_params)
+            run_name = build_name(current_params)
             run = ChelioRun(base_folder, run_name, load_mode=load_mode)
             run.read_data()
             run.convert_to_vmr()

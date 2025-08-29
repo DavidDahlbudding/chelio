@@ -13,6 +13,9 @@
 /analyze/opacity_contributions.ipynb
 /analyze/test_atmospheric_escape.ipynb
 /analyze/test_redoxState.ipynb
+/analyze/test_atmodeller_bower+25.ipynb
+/analyze/contributions+opacities_CIAs.ipynb
+/analyze/plot_phase-diagram.ipynb
 
 *.pyc
 
