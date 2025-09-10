@@ -20,9 +20,12 @@ else:
 # read relevant species from helios_inputs/species.dat
 species = np.loadtxt(os.path.abspath(os.path.join(os.path.dirname(__file__), '../helios_inputs/species.dat')), dtype=str, usecols=(0,))[1:]
 
-# remove CIA (assumes that CIA species are already accounted for!)
-species = np.array([s for s in species if s[:3] != 'CIA'])
+# if CIA_N2N2 exists, append N2 to species
+if 'CIA_N2N2' in species:
+    species = np.append(species, 'N2')
 
+# remove CIA (assumes that CIA species, other than N2, are already accounted for!)
+species = np.array([s for s in species if s[:3] != 'CIA'])
 
 # read GGchem output file
 ggchem_output = os.path.join(os.environ['GGCHEM_PATH'], 'Static_Conc.dat')
