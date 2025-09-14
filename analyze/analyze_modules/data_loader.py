@@ -234,7 +234,7 @@ class ChelioRun:
         if escape_file.exists():
             with open(escape_file, 'r') as f:
                 try:
-                    last_line = f.readlines()[-1]
+                    last_line = f.readlines()[2]
                     self.escape_time_yrs = float(last_line.split()[-1])
                 except (IndexError, ValueError):
                     self.escape_time_yrs = np.nan
