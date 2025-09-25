@@ -57,6 +57,7 @@ class ChelioRun:
         self.mol_names: List[str] = []
         self.dust_names: List[str] = []
         self.num_iterations_read = 0
+        self.iterations_read = np.array([])
         self.final_convergence_status = False
         self.escape_time_yrs = np.nan
 
@@ -145,6 +146,7 @@ class ChelioRun:
                     altitudes_list.append(np.full(self.n_layers, np.nan))
                     convective_list.append(np.full(self.n_layers, np.nan))
 
+        self.iterations_read = np.array(list(indices_to_load))
         self.num_iterations_read = len(data_frames)
         if not data_frames:
             self._populate_with_nan()
@@ -214,6 +216,7 @@ class ChelioRun:
         self.dusts_raw = np.full(shape + (self.n_dust if self.n_dust else 1,), np.nan)
         self.eps_atoms_raw = np.full(shape + (self.n_elem if self.n_elem else 1,), np.nan)
         self.final_convergence_status = False
+        self.iterations_read = np.array([np.nan])
 
 
     def _check_convergence(self, last_data_frame):
@@ -305,6 +308,9 @@ class ChelioRun:
             return data
         except IndexError:
             return { "error": f"Iteration {iteration_index} out of bounds." }
+        except Exception as e:
+            print(e)
+            return { "error": "Unknown error." }
 
 def load_parameter_sweep(
     base_folder: str or Path, 

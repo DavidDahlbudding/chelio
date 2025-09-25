@@ -18,7 +18,7 @@ TEMP_MELTS=(1000 2000) # Melting temperature (K)
 H_OCEANS=(0.1 1.0 10.0) # H ocean abundance
 CtoHs=(0.1 1.0 10.0) # C/H mass ratio
 NtoCs=(0.01 0.1 1.0) # N/C mass ratio
-fO2s=(-5 -2.5 0 2.5 5) # Oxygen fugacity fO2 [delta IW]
+fO2s=(-3 0 3) # Oxygen fugacity fO2 [delta IW]
 
 # --- Run Parameter Grid ---
 

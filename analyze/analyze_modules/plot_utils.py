@@ -243,6 +243,10 @@ def _get_scalar_data(run: ChelioRun, y_param_key: str, layer_idx: int):
         run.convert_to_vmr()
             
     data = run.get_iteration_data()
+
+    if 'error' in data.keys():
+        print(data['error'])
+        return np.nan
         
     if y_param_key in run.mol_names:
         mol_idx = run.mol_names.index(y_param_key)

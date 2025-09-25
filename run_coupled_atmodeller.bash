@@ -13,14 +13,21 @@
 #   --TOA_P <value>        Top of Atmosphere Pressure (in units of 1e-6 bar). Default: 1e-1
 #   --TEMP <value>         Internal Temperature (K). Default: 200
 #   --ALBEDO <value>       Surface Albedo (dimensionless). Default: 0.1
-#   --CplusO <value>       Total Carbon + Oxygen abundance relative to H. Default: 1e-3
-#   --CtoO <value>         Carbon-to-Oxygen ratio. Default: 0.59
-#   --a_N <value>          Nitrogen abundance. Default: 0.0
+#   --TEMP_MELT <value>    Melting temperature (K). Default: 2000
+#   --MELT_FRAC <value>    Melting fraction. Default: 1.0
+#   --H_OCEAN <value>      H ocean abundance. Default: 1.0
+#   --CtoH <value>         C/H mass ratio. Default: 1.0
+#   --NtoC <value>         N/C mass ratio. Default: 0.1
+#   --fO2 <value>          Oxygen fugacity fO2 [delta IW]. Default: 0.0
+#   --StoC <value>         S/C mass ratio. Default: None
+#   --CltoC <value>        Cl/C mass ratio. Default: None
+#   --with_ggchem <value>  Whether to run GGchem. Default: False
 #   --i_min <value>        Starting coupling iteration index. Default: 0
 #   --OUT_DIR <path>       Output directory for this specific run.
 #                          Must be absolute path or relative to CHELIO_PATH.
 #   --NAME <string>        Unique name for this simulation run.
 #                          Used for output file prefixes.
+#   --RAD_EQ_CRIT <value>  Radiative-Equilibrium Criterion. Default: 1e-6
 #
 # Environment Variables Required:
 #   CHELIO_PATH            Absolute path to the 'chelio' repository root.
@@ -99,6 +106,7 @@ CltoC=None
 
 with_ggchem=False
 i_min=0 # Starting index for coupling iterations
+RAD_EQ_CRIT=1e-6
 
 # Output specific parameters (will be passed from multiple_runs.bash)
 OUT_DIR="output" # Output directory relative to CHELIO_PATH
@@ -124,6 +132,7 @@ while [ $# -gt 0 ]; do
         --i_min) i_min="$2"; shift 2 ;;
         --OUT_DIR) OUT_DIR="$2"; shift 2 ;;
         --NAME) NAME="$2"; shift 2 ;;
+        --RAD_EQ_CRIT) RAD_EQ_CRIT="$2"; shift 2 ;;
         *) echo "Error: Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -161,8 +170,8 @@ if [ ! -f "${CHELIO_PATH}/${OUT_DIR}/${NAME}_outgassed/${NAME}_outgassed_tp.dat"
     BOA_P=$(cat "${CHELIO_PATH}/${OUT_DIR}/${NAME}_outgassed/P_BOA.dat")
 
     # if P_BOA < 1e6, exit
-    if (( $(echo "$BOA_P < $BOA_P_THRESHOLD" | bc -l) )); then
-        echo "Error: P_BOA is less than $BOA_P_THRESHOLD dyn/cm^2. Exiting..."
+    if [[ $(awk "BEGIN {print ($BOA_P < $BOA_P_THRESHOLD) ? 1 : 0}") -eq 1 ]]; then
+        echo "Error: P_BOA ($BOA_P) is less than $BOA_P_THRESHOLD dyn/cm^2. Exiting..."
         exit 1
     fi
 
@@ -181,7 +190,8 @@ if [ ! -f "${CHELIO_PATH}/${OUT_DIR}/${NAME}_outgassed/${NAME}_outgassed_tp.dat"
             -coupling_iteration_step 0 \
             -coupling_speed_up no \
             -write_tp_profile_during_run 30000 \
-            -maximum_number_of_iterations 30001
+            -maximum_number_of_iterations 30001 \
+            -radiative_equilibrium_criterion "$RAD_EQ_CRIT"
 fi
 
 if [ "$with_ggchem" == "False" ]; then
@@ -197,8 +207,9 @@ python3 "${CHELIO_PATH}/source/calc_abundances_atmodeller.py" --output_dir "ggch
     --melt_frac "$MELT_FRAC" --T_surf "$TEMP_MELT" \
     --H_ocean "$H_OCEAN" --CtoH "$CtoH" --NtoC "$NtoC" --fO2 "$fO2" # --StoC "$StoC" --CltoC "$CltoC"
 
-if (( $(echo "$BOA_P < $BOA_P_THRESHOLD" | bc -l) )); then
-    echo "Error: P_BOA is less than $BOA_P_THRESHOLD dyn/cm^2. Exiting..."
+# if P_BOA < 1e6, exit
+if [[ $(awk "BEGIN {print ($BOA_P < $BOA_P_THRESHOLD) ? 1 : 0}") -eq 1 ]]; then
+    echo "Error: P_BOA ($BOA_P) is less than $BOA_P_THRESHOLD dyn/cm^2. Exiting..."
     exit 1
 fi
 
@@ -295,7 +306,8 @@ for i in $(seq "$i_min" 1 "$i_max"); do
         -coupling_speed_up "$coupling_speed_up" \
         -started_convection "$started_convection" \
         -write_tp_profile_during_run "$MAX_ITER" \
-        -maximum_number_of_iterations "$(($MAX_ITER+1))"
+        -maximum_number_of_iterations "$(($MAX_ITER+1))" \
+        -radiative_equilibrium_criterion "$RAD_EQ_CRIT"
     cd "${CHELIO_PATH}"
 
     # Check for coupling convergence from HELIOS
