@@ -1,0 +1,40 @@
+# Central configuration for Chelio simulations
+# ---
+# The script supports environment variables using the ${VAR_NAME} syntax.
+# You can set these variables in your shell (e.g., export GGCHEM_PATH=...)
+# or replace the variables with absolute paths directly.
+
+paths:
+  # If null, the script will determine the path automatically.
+  chelio_path: null
+  # --- USER MUST SET THESE ENVIRONMENT VARIABLES OR EDIT THE PATHS ---
+  ggchem_path: "${GGCHEM_PATH}"
+  helios_path: "${HELIOS_PATH}"
+
+simulation_params:
+  toa_pressure: 1.0e-1
+  internal_temp: 150
+  surface_albedo: 0.1
+  melt_temp: 1000
+  melt_frac: 1.0
+  h_ocean: 1.0
+  ctoh_ratio: 0.1
+  ntoc_ratio: 0.01
+  fO2: -3
+  stoc_ratio: null
+  cltoc_ratio: null
+  boa_pressure_threshold: 1.0e6
+
+coupling:
+  with_ggchem: True
+  i_min: 0 # Starting coupling iteration
+  i_max: 10 # Maximum coupling iterations
+  i_full_convergence: 4 # Iteration to switch to full convergence
+  rad_eq_criterion: 1.0e-6
+  helios_max_iter_initial: 1000
+  helios_max_iter_intermediate: 10000
+  helios_max_iter_full: 30000
+
+logging:
+  level: "INFO" # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_file_name: "run.log"
