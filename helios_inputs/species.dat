@@ -1,34 +1,34 @@
 species      absorbing       scattering         mixing_ratio
 
-H2O           yes             yes                file
+H2O           yes             yes                1.16326e-02
 
-CO2           yes             yes                file
+CO2           yes             yes                3.12689e-04
 
-CO            yes             yes                file
+CO            yes             yes                1.54065e-02
 
-CH4           yes             no                 file
+CH4           yes             no                 1.50536e-01
 
-NH3           yes             no                 file
+NH3           yes             no                 1.56843e-05
 
-H2            no	          yes                file
+H2            no	          yes                8.21856e-01
 
-CIA_H2H2      yes             no                 file
+CIA_H2H2      yes             no                 8.21856e-01&8.21856e-01
 
-CIA_CH4CH4      yes             no                 file
+CIA_CH4CH4      yes             no                 1.50536e-01&1.50536e-01
 
-CIA_CO2CH4      yes             no                 file
+CIA_CO2CH4      yes             no                 3.12689e-04&1.50536e-01
 
-CIA_CO2CO2      yes             no                 file
+CIA_CO2CO2      yes             no                 3.12689e-04&3.12689e-04
 
-CIA_CO2H2      yes             no                 file
+CIA_CO2H2      yes             no                 3.12689e-04&8.21856e-01
 
-CIA_H2CH4      yes             no                 file
+CIA_H2CH4      yes             no                 8.21856e-01&1.50536e-01
 
-CIA_N2CH4      yes             no                 file
+CIA_N2CH4      yes             no                 2.40744e-04&1.50536e-01
 
-CIA_N2H2      yes             no                 file
+CIA_N2H2      yes             no                 2.40744e-04&8.21856e-01
 
-CIA_N2H2O      yes             no                 file
+CIA_N2H2O      yes             no                 2.40744e-04&1.16326e-02
 
-CIA_N2N2      yes             no                 file
+CIA_N2N2      yes             no                 2.40744e-04&2.40744e-04
 
