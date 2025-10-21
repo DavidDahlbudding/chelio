@@ -118,9 +118,14 @@ def main():
                 capture_output=True,
                 text=True,
                 input=ggchem_input,
+                timeout=120
             )
             if process.returncode != 0:
                 log.warning(f"GGchem failed to converge for {sim_folder} (exit code {process.returncode}).")
+                log.warning("GGchem stdout:\n" + process.stdout)
+                log.warning("GGchem stderr:\n" + process.stderr)
+            elif process.returncode == 124:
+                log.warning(f"GGchem timed out for {sim_folder}.")
                 log.warning("GGchem stdout:\n" + process.stdout)
                 log.warning("GGchem stderr:\n" + process.stderr)
             else:

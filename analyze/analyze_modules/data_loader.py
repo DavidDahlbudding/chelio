@@ -100,13 +100,20 @@ class ChelioRun:
             i += 1
         
         if last_valid_i == -1:
+            print(f"No valid data found for run {self.run_name}")
             self._populate_with_nan()
             return
             
-        if self.load_mode == 'last':
+        if self.load_mode == 'last' or self.load_mode == 'final':
             indices_to_load = [last_valid_i]
-        else: # load_mode == 'all'
+        elif self.load_mode == 'all':
             indices_to_load = range(last_valid_i + 1)
+        elif isinstance(self.load_mode, int):
+            indices_to_load = [self.load_mode]
+            if indices_to_load[0] > last_valid_i:
+                raise ValueError(f"Invalid load_mode: Index to load ({indices_to_load[0]}) > last valid index ({last_valid_i})")
+        else:
+            raise ValueError(f"Invalid load_mode: {self.load_mode}")
         
         data_frames = []
         mus_list = []
@@ -114,15 +121,19 @@ class ChelioRun:
         convective_list = []
 
         # Read header from the first available file to initialize dimensions
-        self._read_header_info(self.run_path / f"Static_Conc_0.dat")
+        self._read_header_info(self.run_path / f"Static_Conc_{indices_to_load[0]}.dat")
         
         for i in indices_to_load:
             conc_path = self.run_path / f"Static_Conc_{i}.dat"
             # We assume file exists from the check above
             with warnings.catch_warnings():
-                warnings.simplefilter("error", UserWarning)
+                warnings.simplefilter("ignore", UserWarning)
                 try:
                     d = np.loadtxt(conc_path, skiprows=3)
+                    if d.shape == (0,):
+                        raise UserWarning(f"Static_Conc_{i}.dat is empty")
+                    elif len(d.shape) == 1:
+                        d = d[np.newaxis, :]
                     data_frames.append(d)
                     
                     # Load associated files
@@ -141,10 +152,11 @@ class ChelioRun:
                         convective_list.append(np.full(self.n_layers, np.nan))
 
                 except (UserWarning, IndexError, ValueError): # Catches malformed files
-                    data_frames.append(np.full((self.n_layers, data_frames[0].shape[1]), np.nan))
+                    data_frames.append(np.full((self.n_layers, 4+self.n_elem+self.n_mol+2*self.n_dust+self.n_elem+4), np.nan))
                     mus_list.append(np.full(self.n_layers, np.nan))
                     altitudes_list.append(np.full(self.n_layers, np.nan))
                     convective_list.append(np.full(self.n_layers, np.nan))
+                    self._populate_with_nan()
 
         self.iterations_read = np.array(list(indices_to_load))
         self.num_iterations_read = len(data_frames)
@@ -155,9 +167,10 @@ class ChelioRun:
         self._process_data_frames(data_frames, mus_list, altitudes_list, convective_list)
         self._read_escape_time()
         self._check_convergence(data_frames[-1])
-        
-        if self.load_mode == 'last' and not self.final_convergence_status:
-            self._populate_with_nan()
+
+        #if self.load_mode == 'last' and not self.final_convergence_status:
+        #    print(f"Run {self.run_name} did not converge, populating with NaNs")
+        #    self._populate_with_nan()
 
     def _read_header_info(self, file_path):
         if not file_path.exists():
@@ -173,6 +186,10 @@ class ChelioRun:
         self.dust_names = [name[1:] for name in raw_dust_names]
 
     def _process_data_frames(self, data_frames, mus_list, altitudes_list, convective_list):
+        if data_frames[-1].shape[1] != self.n_layers:
+            # pad with NaNs
+            data_frames[-1] = np.pad(data_frames[-1], ((0, self.n_layers - data_frames[-1].shape[0]), (0, 0)), mode='constant', constant_values=np.nan)
+
         all_data = np.array(data_frames) # (n_iter, n_layers, n_cols)
         
         self.pressures_bar = all_data[:, :, 2] * 1e-6

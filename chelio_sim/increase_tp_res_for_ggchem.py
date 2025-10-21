@@ -14,7 +14,7 @@ else:
     sys.exit(1)
 
 #out_file = os.path.join(os.environ['GGCHEM_PATH'], 'structures/pt_helios.in')
-out_file = 'test_pt_helios.in'
+out_file = 'test_pt_resx2.in'
 
 # read and edit file line by line
 with open(read_tp, 'r') as f:
