@@ -33,7 +33,7 @@ coupling:
   i_max: 10 # Maximum coupling iterations
   i_full_convergence: 4 # Iteration to switch to full convergence
   rad_eq_criterion: 1.0e-8
-  helios_max_iter_initial: 1000
+  helios_max_iter_initial: 300
   helios_max_iter_intermediate: 10000
   helios_max_iter_full: 30000
 

@@ -295,7 +295,7 @@ def main():
                 "coupling_mode": "yes",
                 "coupling_iteration_step": i,
                 "coupling_speed_up": coupling_speed_up,
-                #"started_convection": started_convection,
+                "started_convection": started_convection,
                 "write_tp_profile_during_run": max_iter,
                 "maximum_number_of_iterations": max_iter + 1,
                 "radiative_equilibrium_criterion": config["coupling"]["rad_eq_criterion"],
@@ -313,6 +313,7 @@ def main():
 
             # Prepare for next GGchem run
             new_tp_profile = os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i}.dat")
+            shutil.copy(new_tp_profile, os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'))
             shutil.copy(new_tp_profile, ggchem_pt_input)
 
             # Run GGchem
