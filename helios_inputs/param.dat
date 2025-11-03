@@ -20,7 +20,7 @@ planet type =                                         rocky                     
 
 === === GRID === ===
 
-TOA pressure [10^-6 bar] =                            1e-1                            [number > 0]                                 (CL: Y)
+TOA pressure [10^-6 bar] =                            1e0                             [number > 0]                                 (CL: Y)
 BOA pressure [10^-6 bar] =                            1e7                             [number > 0]                                 (CL: Y)
 
 === === ITERATION === ===

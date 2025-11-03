@@ -63,10 +63,10 @@ if __name__ == "__main__":
         "--Teq", type=float, default=500, help="Equilibrium Temperature (K)"
     )
     parser.add_argument(
-        "--Pmin", type=float, default=1e-1, help="Minimum Pressure (in 1e-6 bar units, e.g., 1e-1 for 1e-7 bar)"
+        "--Pmin", type=float, default=1e-6, help="Minimum Pressure (in bar)"
     )
     parser.add_argument(
-        "--Pmax", type=float, default=1e7, help="Maximum Pressure (in 1e-6 bar units, e.g., 1e7 for 10 bar)"
+        "--Pmax", type=float, default=1e0, help="Maximum Pressure (in bar)"
     )
     args = parser.parse_args()
 

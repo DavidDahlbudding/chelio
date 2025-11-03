@@ -12,25 +12,27 @@ paths:
   helios_path: "${HELIOS_PATH}"
 
 simulation_params:
-  toa_pressure: 1.0e-1
-  internal_temp: 150
+  with_outgassed: False
+  toa_pressure: 1.0e0
+  internal_temp: 50
   surface_albedo: 0.1
-  melt_temp: 1000
+  melt_temp: 2000
   melt_frac: 1.0
   h_ocean: 1.0
-  ctoh_ratio: 0.1
-  ntoc_ratio: 0.01
+  ctoh_ratio: 1.0
+  ntoc_ratio: 0.1
   fO2: -3
   stoc_ratio: null
   cltoc_ratio: null
-  boa_pressure_threshold: 1.0e6
+  min_boa_pressure: 1.0e6 # dyn/cm^2 (1e6 = 1 bar)
+  max_boa_pressure: 1.0e9 # dyn/cm^2
 
 coupling:
   with_ggchem: True
   i_min: 0 # Starting coupling iteration
   i_max: 10 # Maximum coupling iterations
   i_full_convergence: 4 # Iteration to switch to full convergence
-  rad_eq_criterion: 1.0e-6
+  rad_eq_criterion: 1.0e-8
   helios_max_iter_initial: 1000
   helios_max_iter_intermediate: 10000
   helios_max_iter_full: 30000

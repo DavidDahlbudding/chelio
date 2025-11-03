@@ -7,9 +7,12 @@ import sys
 from pathlib import Path
 
 import yaml
+import numpy as np
+from scipy.interpolate import interp1d
 
 # Import the refactored modules
-from chelio_sim import abundances, external_runners, init_pt, mixfile_utils
+from chelio_sim import abundances, external_runners, init_pt, mixfile_utils, rt_utils
+from chelio_sim.rt_utils import OpacityCalculator, calculate_tp_profile, parse_mixfile
 
 
 def setup_logging(log_dir, config):
@@ -141,12 +144,11 @@ def main():
     # 5. EXECUTE SIMULATION LOGIC (Mirrors the bash script)
     try:
         sim_p = config["simulation_params"]
-        min_boa_pressure = sim_p["min_boa_pressure"]
-        max_boa_pressure = sim_p["max_boa_pressure"]
+        boa_p_threshold = sim_p["boa_pressure_threshold"]
 
         # --- Initial abundance calculation and HELIOS run for outgassed atmosphere ---
         outgassed_tp_file = os.path.join(run_output_dir_outgassed, f"{args.name}_outgassed_tp.dat")
-        if not os.path.exists(outgassed_tp_file) and sim_p["with_outgassed"]:
+        if not os.path.exists(outgassed_tp_file):
             abundances.calculate_abundances(
                 output_dir="helios",
                 melt_frac=sim_p["melt_frac"],
@@ -155,8 +157,8 @@ def main():
                 CtoH=sim_p["ctoh_ratio"],
                 NtoC=sim_p["ntoc_ratio"],
                 fO2=sim_p["fO2"],
-                StoC=sim_p["stoc_ratio"],
-                CltoC=sim_p["cltoc_ratio"],
+                StoC=sim_p.get("stoc_ratio"),
+                CltoC=sim_p.get("cltoc_ratio"),
             )
             shutil.copy(os.path.join(chelio_path, "helios_inputs", "species.dat"), os.path.join(run_output_dir_outgassed, "species.dat"))
             p_boa_path = os.path.join(chelio_path, "helios_inputs", "P_BOA.dat")
@@ -165,14 +167,9 @@ def main():
             with open(p_boa_path, "r") as f:
                 boa_p = float(f.read().strip())
             
-            if boa_p < float(min_boa_pressure):
-                log.error(f"P_BOA ({boa_p}) is less than {min_boa_pressure} dyn/cm^2. Exiting...")
+            if boa_p < float(boa_p_threshold):
+                log.error(f"P_BOA ({boa_p}) is less than {boa_p_threshold} dyn/cm^2. Exiting...")
                 sys.exit(1)
-            elif boa_p > float(max_boa_pressure):
-                log.error(f"P_BOA ({boa_p}) is greater than {max_boa_pressure} dyn/cm^2. Exiting...")
-                sys.exit(1)
-
-            log.info(f"P_BOA ({boa_p}) is within the range of {min_boa_pressure} to {max_boa_pressure} dyn/cm^2.")
 
             log.info("Running HELIOS with outgassed molecular species...")
             helios_params_outgas = {
@@ -198,11 +195,6 @@ def main():
             log.info("`with_ggchem` is False. Exiting after initial HELIOS run.")
             sys.exit(0)
 
-        # if GGchem/database.dat exists, remove it
-        #if os.path.exists(os.path.join(ggchem_path, "database.dat")):
-        #    os.remove(os.path.join(ggchem_path, "database.dat"))
-        #    log.info("Removed GGchem/database.dat")
-
         # --- Initial GGchem Setup and Run ---
         log.info("Initializing GGchem with initial abundances and P-T profile...")
         abundances.calculate_abundances(
@@ -213,27 +205,21 @@ def main():
             CtoH=sim_p["ctoh_ratio"],
             NtoC=sim_p["ntoc_ratio"],
             fO2=sim_p["fO2"],
-            StoC=sim_p["stoc_ratio"],
-            CltoC=sim_p["cltoc_ratio"],
+            StoC=sim_p.get("stoc_ratio"),
+            CltoC=sim_p.get("cltoc_ratio"),
         )
-        #os.remove(os.path.join(ggchem_path, "database.dat"))
         p_boa_path = os.path.join(chelio_path, "helios_inputs", "P_BOA.dat")
         with open(p_boa_path, "r") as f:
             boa_p = float(f.read().strip())
 
-        if boa_p < float(min_boa_pressure):
-            log.error(f"P_BOA ({boa_p}) is less than {min_boa_pressure} dyn/cm^2. Exiting...")
+        if boa_p < float(boa_p_threshold):
+            log.error(f"P_BOA ({boa_p}) is less than {boa_p_threshold} dyn/cm^2. Exiting...")
             sys.exit(1)
-        elif boa_p > float(max_boa_pressure):
-            log.error(f"P_BOA ({boa_p}) is greater than {max_boa_pressure} dyn/cm^2. Exiting...")
-            sys.exit(1)
-
-        log.info(f"P_BOA ({boa_p}) is within the range of {min_boa_pressure} to {max_boa_pressure} dyn/cm^2.")
         
         shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'species.dat'), run_output_dir)
         shutil.copy(p_boa_path, os.path.join(run_output_dir, "P_BOA.dat"))
 
-        init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p)
+        init_pt.create_pt_profile(Teq=500, Pmin=sim_p["toa_pressure"], Pmax=boa_p)
 
         # Prepare GGchem's working directory
         shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'abundances.in'), os.path.join(ggchem_path, 'abund_helios.in'))
@@ -248,6 +234,23 @@ def main():
         log.info("Running initial GGchem calculation...")
         external_runners.run_ggchem(ggchem_path)
         
+        # --- Initialize Opacity Calculator ---
+        # This is a placeholder for getting the species list dynamically
+        # For now, we hardcode the species we expect to have opacities for.
+        species_for_opacity = ["H2O", "CO", "CH4", "NH3", "CO2", "H2S"]
+        opacity_files = {s: os.path.join(helios_path, "input", "opacity", "r50_kdistr", f"{s}_opac_ip_kdistr.h5") for s in species_for_opacity}
+        
+        # Check if all opacity files exist
+        for s, path in opacity_files.items():
+            if not os.path.exists(path):
+                log.error(f"Opacity file for {s} not found at {path}. Exiting.")
+                sys.exit(1)
+
+        # We need a fine T/P grid for the interpolator, but it's not used yet in the current implementation.
+        # Passing placeholder grids.
+        opac_calc = OpacityCalculator(species_for_opacity, opacity_files, T_grid=None, P_grid=None)
+        log.info("Opacity calculator initialized.")
+
         # --- Coupling Loop ---
         i_min = config["coupling"]["i_min"]
         i_max = config["coupling"]["i_max"]
@@ -265,62 +268,68 @@ def main():
             mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
             shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i}.dat"))
 
-            # Determine HELIOS parameters for this iteration
-            if i == 0:
-                max_iter = config["coupling"]["helios_max_iter_initial"]
-            elif i >= i_full:
-                max_iter = config["coupling"]["helios_max_iter_full"]
-                coupling_speed_up = "yes"
-            else:
-                max_iter = config["coupling"]["helios_max_iter_intermediate"]
+            # --- Fast T-P Calculation ---
+            p_grid, mu_profile, species, mix_ratios = parse_mixfile(helios_mixfile)
 
-            # Check for previous convection status
-            convection_file = os.path.join(run_output_dir, f"{args.name}_started_convection.dat")
-            if os.path.exists(convection_file):
-                with open(convection_file, 'r') as f:
-                    started_convection = int(f.read().strip())
-                log.info(f"Previous convection status: {started_convection}")
-
-            # Prepare HELIOS params
-            helios_params = {
-                "name": args.name,
-                "output_directory": os.path.join(chelio_path, args.out_dir),
-                "toa_pressure": sim_p["toa_pressure"],
-                "boa_pressure": boa_p,
-                "internal_temperature": sim_p["internal_temp"],
-                "surface_albedo": sim_p["surface_albedo"],
-                "path_to_species_file": os.path.join(chelio_path, "helios_inputs", "species.dat"),
-                "file_with_vertical_mixing_ratios": helios_mixfile,
-                "path_to_temperature_file": os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i-1}.dat"),
-                "coupling_mode": "yes",
-                "coupling_iteration_step": i,
-                "coupling_speed_up": coupling_speed_up,
-                #"started_convection": started_convection,
-                "write_tp_profile_during_run": max_iter,
-                "maximum_number_of_iterations": max_iter + 1,
-                "radiative_equilibrium_criterion": config["coupling"]["rad_eq_criterion"],
+            # Create interpolators for mu and mixing ratios as functions of pressure
+            mu_func = interp1d(np.log10(p_grid), mu_profile, bounds_error=False, fill_value="extrapolate")
+            mix_ratio_funcs = {
+                s: interp1d(np.log10(p_grid), mix_ratios[s], bounds_error=False, fill_value="extrapolate")
+                for s in species if s in opac_calc.species
             }
-            external_runners.run_helios(helios_path, helios_params)
 
-            # Check for convergence
+            def get_mu(p): # p in bar
+                return mu_func(np.log10(p))
+
+            def get_mix_ratios(p): # p in bar
+                return {s: f(np.log10(p)) for s, f in mix_ratio_funcs.items()}
+            
+            # Adiabatic gradient (placeholder - should be calculated from thermodynamics)
+            # Using a constant value typical for diatomic-dominated gas for now.
+            def get_nabla_ad(T, P):
+                return 0.28 
+
+            # Calculate T-P profile
+            new_T_profile = calculate_tp_profile(
+                T_eff=sim_p["internal_temp"],
+                p_surf=p_grid.max(),
+                p_top=p_grid.min(),
+                g=config["planet_params"]["g"], 
+                mu=get_mu,
+                nabla_ad=get_nabla_ad,
+                opacity_calculator=opac_calc,
+                mix_ratios_profile=get_mix_ratios,
+                target_p_grid=p_grid
+            )
+
+            # Save the new T-P profile in a format GGchem can read
+            # The format is simple: two columns, Pressure (dyn/cm^2) and Temperature (K)
+            new_tp_profile_path = os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i}.dat")
+            tp_data_to_save = np.vstack([p_grid * 1e6, new_T_profile]).T
+            np.savetxt(
+                new_tp_profile_path,
+                tp_data_to_save,
+                fmt="%.6e",
+                header="Pressure (dyn/cm^2)\tTemperature (K)",
+                comments=""
+            )
+            log.info(f"Saved new T-P profile to {new_tp_profile_path}")
+
+            # Check for convergence (use HELIOS convergence for now)
             convergence_file = os.path.join(run_output_dir, f"{args.name}_coupling_convergence.dat")
-            if os.path.exists(convergence_file):
-                with open(convergence_file, "r") as f:
-                    stop_flag = int(f.read().strip())
-                if stop_flag == 1:
-                    log.info("Coupling converged. Stopping iterations.")
-                    break
+            if i > i_min: # Don't check on the first iteration
+                if os.path.exists(convergence_file):
+                    with open(convergence_file, "r") as f:
+                        stop_flag = int(f.read().strip())
+                    if stop_flag == 1:
+                        log.info("Coupling converged. Stopping iterations.")
+                        break
 
             # Prepare for next GGchem run
-            new_tp_profile = os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i}.dat")
-            shutil.copy(new_tp_profile, ggchem_pt_input)
+            shutil.copy(new_tp_profile_path, ggchem_pt_input)
 
             # Run GGchem
-            # in case input is required, input 200 times newline
-            input = "\n" * 201
-            external_runners.run_ggchem(ggchem_path, input=input)
-            # remove database.dat in ggchem_path
-            #os.remove(os.path.join(ggchem_path, "database.dat"))
+            external_runners.run_ggchem(ggchem_path)
 
         log.info(f"--- Finalizing Simulation ---")
         # Final conversion of GGchem output

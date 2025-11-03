@@ -4,7 +4,7 @@ import sys
 
 log = logging.getLogger(__name__)
 
-def run_command(command, cwd):
+def run_command(command, cwd, input=None):
     """
     Runs an external command, streaming its output live to the console and log
     while also capturing it for error reporting.
@@ -29,6 +29,9 @@ def run_command(command, cwd):
                     log.info(line)   # Also write to the log file
                 last_line = line
 
+            if input is not None:
+                process.communicate(input=input)
+                
             # Wait for the process to finish to get the return code
             process.wait()
 
@@ -77,8 +80,8 @@ def run_helios(helios_path, params):
 
     run_command(command, cwd=helios_path)
 
-def run_ggchem(ggchem_path, params_file="input/param_helios.in"):
+def run_ggchem(ggchem_path, params_file="input/param_helios.in", input=None):
     """Runs the GGchem executable."""
     log.info("--- Preparing to run GGchem ---")
     command = ["./ggchem", params_file]
-    run_command(command, cwd=ggchem_path)
+    run_command(command, cwd=ggchem_path, input=input)

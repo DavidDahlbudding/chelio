@@ -99,7 +99,7 @@ class ChelioRun:
             last_valid_i = i
             i += 1
         
-        if last_valid_i == -1:
+        if last_valid_i == -1 and self.load_mode in ['last', 'final', 'all']:
             print(f"No valid data found for run {self.run_name}")
             self._populate_with_nan()
             return
@@ -112,6 +112,10 @@ class ChelioRun:
             indices_to_load = [self.load_mode]
             if indices_to_load[0] > last_valid_i:
                 raise ValueError(f"Invalid load_mode: Index to load ({indices_to_load[0]}) > last valid index ({last_valid_i})")
+        elif isinstance(self.load_mode, str):
+            indices_to_load = [self.load_mode]
+        elif isinstance(self.load_mode, list):
+            indices_to_load = self.load_mode
         else:
             raise ValueError(f"Invalid load_mode: {self.load_mode}")
         
@@ -123,15 +127,16 @@ class ChelioRun:
         # Read header from the first available file to initialize dimensions
         self._read_header_info(self.run_path / f"Static_Conc_{indices_to_load[0]}.dat")
         
-        for i in indices_to_load:
-            conc_path = self.run_path / f"Static_Conc_{i}.dat"
+        for i, index in enumerate(indices_to_load):
+            # i is integer, index can be string or integer
+            conc_path = self.run_path / f"Static_Conc_{index}.dat"
             # We assume file exists from the check above
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 try:
                     d = np.loadtxt(conc_path, skiprows=3)
                     if d.shape == (0,):
-                        raise UserWarning(f"Static_Conc_{i}.dat is empty")
+                        raise UserWarning(f"Static_Conc_{index}.dat is empty")
                     elif len(d.shape) == 1:
                         d = d[np.newaxis, :]
                     data_frames.append(d)
@@ -186,9 +191,15 @@ class ChelioRun:
         self.dust_names = [name[1:] for name in raw_dust_names]
 
     def _process_data_frames(self, data_frames, mus_list, altitudes_list, convective_list):
-        if data_frames[-1].shape[1] != self.n_layers:
-            # pad with NaNs
-            data_frames[-1] = np.pad(data_frames[-1], ((0, self.n_layers - data_frames[-1].shape[0]), (0, 0)), mode='constant', constant_values=np.nan)
+        # get max number of layers
+        max_n_layers = max([df.shape[0] for df in data_frames])
+        for idx, df in enumerate(data_frames):
+            if df.shape[0] != max_n_layers:
+                df = np.pad(df, ((0, max_n_layers - df.shape[0]), (0, 0)), mode='constant', constant_values=np.nan)
+                data_frames[idx] = df
+        #if data_frames[-1].shape[1] != self.n_layers:
+        #    # pad with NaNs
+        #    data_frames[-1] = np.pad(data_frames[-1], ((0, self.n_layers - data_frames[-1].shape[0]), (0, 0)), mode='constant', constant_values=np.nan)
 
         all_data = np.array(data_frames) # (n_iter, n_layers, n_cols)
         
