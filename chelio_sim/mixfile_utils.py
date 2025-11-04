@@ -162,6 +162,9 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["CHELIO_PATH"],
         max_vmr[:,i] = p_sat(ref_T[i_append:], header[i+5]) * 1e-6 # dyn/cm^2 -> bar
     max_vmr = max_vmr / ref_P[i_append:,np.newaxis]
 
+    i_h2 = np.where(header == "H2")[0][0] - 5
+    max_vmr[:,i_h2] = 1.01 # H2 condensation is ignored
+
     missing_data[:,0] = ref_P[i_append:]
     missing_data[:,1] = ref_T[i_append:]
 
@@ -169,19 +172,18 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["CHELIO_PATH"],
     # mean molecular weight mu gets calculated later
     missing_data[:,4] = data[-1,4] # electron VMR (usually < 1e-300)
 
-    missing_data[:,5:] = np.minimum(max_vmr, data[-1,5:])
+    missing_data[:,5:] = np.minimum(max_vmr, data[-1,5:][np.newaxis,:])
 
-    i_h2 = np.where(header == "H2")[0][0] - 5
     total_vmr = np.sum(missing_data[:,5:], axis=-1)
     while np.any(total_vmr < (1 - 1e-3)):
         mask = missing_data[:,5:] < max_vmr
-        mask[:,i_h2] = True # ignore H2 condensation
         
-        distribution_factor = missing_data[:,5:]
+        distribution_factor = missing_data[:,5:].copy() # distribute proportional to the "current" VMR
         distribution_factor[~mask] = 0.0 # don't distribut missing VMR to already saturated species
         distribution_factor = distribution_factor / np.sum(distribution_factor, axis=-1, keepdims=True) # normalize
 
-        missing_data[:,5:] = missing_data[:,5:] + distribution_factor * (1 - total_vmr)[:,np.newaxis]
+        missing_data[:,5:] = missing_data[:,5:] + (distribution_factor * (1 - total_vmr)[:,np.newaxis])
+        missing_data[:,5:] = np.minimum(max_vmr, missing_data[:,5:])
         total_vmr = np.sum(missing_data[:,5:], axis=-1)
 
     if np.any(missing_data[:,i_h2+5] > max_vmr[:,i_h2]):
@@ -199,7 +201,7 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["CHELIO_PATH"],
     return missing_data
 
 
-def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path):
+def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.path.join(os.environ["CHELIO_PATH"], "ggchem_inputs", "pt_helios.in")):
     """
     Converts GGchem output (Static_Conc.dat) to a HELIOS mixfile.
 
@@ -312,7 +314,7 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path):
     new_data[:, 3] = mu
 
     if n_layers > len(data):
-        new_data = append_profiles(new_header, new_data)
+        new_data = append_profiles(new_header, new_data, ref_pt=ref_pt)
 
     # nicely format header
     header_string = []

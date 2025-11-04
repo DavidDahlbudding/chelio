@@ -78,6 +78,8 @@ def main():
         "--name", required=True, help="Unique name for the simulation run."
     )
     parser.add_argument("--out_dir", default="output", help="Root output directory.")
+    parser.add_argument("--outgas_or_manual", default="manual", help="Outgassing or manual mode.")
+    parser.add_argument("--with_outgassed", default=False, help="Whether to use outgassed atmosphere.")
 
     # Add overrides for key simulation parameters
     sim_params = [
@@ -92,6 +94,13 @@ def main():
         "fO2",
         "stoc_ratio",
         "cltoc_ratio",
+        "min_boa_pressure",
+        "max_boa_pressure",
+        "surface_pressure",
+        "a_h",
+        "a_c",
+        "a_o",
+        "a_n",
     ]
     for param in sim_params:
         parser.add_argument(f"--{param}", type=float, help=f"Override {param} from config.")
@@ -131,12 +140,13 @@ def main():
     run_output_dir = os.path.join(chelio_path, args.out_dir, args.name)
     run_output_dir_outgassed = os.path.join(chelio_path, args.out_dir, f"{args.name}_outgassed")
     os.makedirs(run_output_dir, exist_ok=True)
-    os.makedirs(run_output_dir_outgassed, exist_ok=True)
 
     # 4. SETUP LOGGING
     log = setup_logging(run_output_dir, config["logging"])
     log.info(f"--- Starting Chelio Simulation: {args.name} ---")
     log.info(f"Output directory: {run_output_dir}")
+
+    shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'param.dat'), os.path.join(helios_path, 'param.dat'))
 
     # 5. EXECUTE SIMULATION LOGIC (Mirrors the bash script)
     try:
@@ -146,7 +156,10 @@ def main():
 
         # --- Initial abundance calculation and HELIOS run for outgassed atmosphere ---
         outgassed_tp_file = os.path.join(run_output_dir_outgassed, f"{args.name}_outgassed_tp.dat")
-        if not os.path.exists(outgassed_tp_file) and sim_p["with_outgassed"]:
+        if sim_p["outgas_or_manual"] == "outgas" and not os.path.exists(outgassed_tp_file) and sim_p["with_outgassed"]:
+            
+            os.makedirs(run_output_dir_outgassed, exist_ok=True)
+
             abundances.calculate_abundances(
                 output_dir="helios",
                 melt_frac=sim_p["melt_frac"],
@@ -192,7 +205,7 @@ def main():
             }
             external_runners.run_helios(helios_path, helios_params_outgas)
         else:
-            log.info(f"Skipping initial outgassed HELIOS run as {outgassed_tp_file} already exists.")
+            log.info(f"Skipping initial outgassed HELIOS run as {outgassed_tp_file} already exists or outgassing is disabled.")
 
         if not config["coupling"]["with_ggchem"]:
             log.info("`with_ggchem` is False. Exiting after initial HELIOS run.")
@@ -205,33 +218,43 @@ def main():
 
         # --- Initial GGchem Setup and Run ---
         log.info("Initializing GGchem with initial abundances and P-T profile...")
-        abundances.calculate_abundances(
-            output_dir="ggchem",
-            melt_frac=sim_p["melt_frac"],
-            T_surf=sim_p["melt_temp"],
-            H_ocean=sim_p["h_ocean"],
-            CtoH=sim_p["ctoh_ratio"],
-            NtoC=sim_p["ntoc_ratio"],
-            fO2=sim_p["fO2"],
-            StoC=sim_p["stoc_ratio"],
-            CltoC=sim_p["cltoc_ratio"],
-        )
-        #os.remove(os.path.join(ggchem_path, "database.dat"))
-        p_boa_path = os.path.join(chelio_path, "helios_inputs", "P_BOA.dat")
-        with open(p_boa_path, "r") as f:
-            boa_p = float(f.read().strip())
+        if sim_p["outgas_or_manual"] == "outgas":
+            abundances.calculate_abundances_atmodeller(
+                output_dir="ggchem",
+                melt_frac=sim_p["melt_frac"],
+                T_surf=sim_p["melt_temp"],
+                H_ocean=sim_p["h_ocean"],
+                CtoH=sim_p["ctoh_ratio"],
+                NtoC=sim_p["ntoc_ratio"],
+                fO2=sim_p["fO2"],
+                StoC=sim_p["stoc_ratio"],
+                CltoC=sim_p["cltoc_ratio"],
+            )
+            #os.remove(os.path.join(ggchem_path, "database.dat"))
+            p_boa_path = os.path.join(chelio_path, "helios_inputs", "P_BOA.dat")
+            with open(p_boa_path, "r") as f:
+                boa_p = float(f.read().strip())
 
-        if boa_p < float(min_boa_pressure):
-            log.error(f"P_BOA ({boa_p}) is less than {min_boa_pressure} dyn/cm^2. Exiting...")
-            sys.exit(1)
-        elif boa_p > float(max_boa_pressure):
-            log.error(f"P_BOA ({boa_p}) is greater than {max_boa_pressure} dyn/cm^2. Exiting...")
-            sys.exit(1)
+            if boa_p < float(min_boa_pressure):
+                log.error(f"P_BOA ({boa_p}) is less than {min_boa_pressure} dyn/cm^2. Exiting...")
+                sys.exit(1)
+            elif boa_p > float(max_boa_pressure):
+                log.error(f"P_BOA ({boa_p}) is greater than {max_boa_pressure} dyn/cm^2. Exiting...")
+                sys.exit(1)
 
-        log.info(f"P_BOA ({boa_p}) is within the range of {min_boa_pressure} to {max_boa_pressure} dyn/cm^2.")
-        
-        shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'species.dat'), run_output_dir)
-        shutil.copy(p_boa_path, os.path.join(run_output_dir, "P_BOA.dat"))
+            log.info(f"P_BOA ({boa_p}) is within the range of {min_boa_pressure} to {max_boa_pressure} dyn/cm^2.")
+            
+            shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'species.dat'), run_output_dir)
+            shutil.copy(p_boa_path, os.path.join(run_output_dir, "P_BOA.dat"))
+        else:
+            abundances.calculate_abundances_manual(
+                output_dir="ggchem",
+                a_H=sim_p["a_h"],
+                a_C=sim_p["a_c"],
+                a_O=sim_p["a_o"],
+                a_N=sim_p["a_n"],
+            )
+            boa_p = float(sim_p["surface_pressure"])
 
         init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p)
 
@@ -256,14 +279,14 @@ def main():
         started_convection = 0
         coupling_speed_up = "no"
 
+        # Convert GGchem output to HELIOS mixfile
+        ggchem_output = os.path.join(ggchem_path, "Static_Conc.dat")
+        shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i_min}.dat"))
+        helios_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i_min}.dat")
+        mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
+
         for i in range(i_min, i_max + 1):
             log.info(f"--- Coupling Iteration: {i} ---")
-
-            # Convert GGchem output to HELIOS mixfile
-            ggchem_output = os.path.join(ggchem_path, "Static_Conc.dat")
-            helios_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i}.dat")
-            mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
-            shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i}.dat"))
 
             # Determine HELIOS parameters for this iteration
             if i == 0:
@@ -318,10 +341,14 @@ def main():
 
             # Run GGchem
             # in case input is required, input 200 times newline
-            input = "\n" * 201
+            input = "\n" * 210
             external_runners.run_ggchem(ggchem_path, input=input)
             # remove database.dat in ggchem_path
             #os.remove(os.path.join(ggchem_path, "database.dat"))
+            # Convert GGchem output to HELIOS mixfile
+            shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
+            helios_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i+1}.dat")
+            mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
 
         log.info(f"--- Finalizing Simulation ---")
         # Final conversion of GGchem output

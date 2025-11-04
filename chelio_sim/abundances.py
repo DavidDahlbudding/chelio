@@ -34,7 +34,7 @@ M_EARTH = 5.972e24  # kg
 R_EARTH = 6.371e6  # m
 
 
-def calculate_abundances(
+def calculate_abundances_atmodeller(
     output_dir,
     melt_frac,
     T_surf,
@@ -219,6 +219,31 @@ def calculate_abundances(
     log.info(f"Wrote P_BOA = {boa_p:.5e} dyn/cm^2 to {p_boa_path}")
 
 
+def calculate_abundances_manual(
+    output_dir,
+    a_H,
+    a_C,
+    a_O,
+    a_N,
+):
+
+    if output_dir != "ggchem":
+        raise ValueError("Output must be ggchem")
+
+    a_HCON = np.array([a_H, a_C, a_O, a_N])
+    a_HCON = a_HCON / np.sum(a_HCON) # normalize
+    a_HCON = np.maximum(a_HCON, 1e-12) # avoid zero values
+    a_HCON = a_HCON / np.sum(a_HCON) # renormalize
+    a_HCON = np.log10(a_HCON/a_HCON[0]) + 12
+
+    filename = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../ggchem_inputs/abundances.in")
+    )
+    with open(filename, "w") as f:
+        for i,e in enumerate(["H", "C", "O", "N"]):
+            f.write(f"{e} {a_HCON[i]:.5f}\n")
+
+
 if __name__ == "__main__":
     # This block allows for standalone testing.
     logging.basicConfig(
@@ -233,24 +258,42 @@ if __name__ == "__main__":
         help="Output format ('ggchem' or 'helios')",
     )
     parser.add_argument(
-        "--melt_frac", type=float, default=1.0, help="Melt fraction of the mantle"
+        "--outgas", type=bool, default=False, help="Whether to use atmodeller or not"
     )
-    parser.add_argument(
-        "--T_surf", type=float, default=2000.0, help="Surface temperature (K)"
-    )
-    parser.add_argument(
-        "--H_ocean",
-        type=float,
-        default=1.0,
-        help="H content in Earth oceans equivalent",
-    )
-    parser.add_argument("--CtoH", type=float, default=1.0, help="C/H mass ratio")
-    parser.add_argument("--NtoC", type=float, default=0.1, help="N/C mass ratio")
-    parser.add_argument(
-        "--fO2", type=float, default=0.0, help="Oxygen fugacity fO2 [delta IW]"
-    )
-    parser.add_argument("--StoC", type=float, default=None, help="S/C mass ratio")
-    parser.add_argument("--CltoC", type=float, default=None, help="Cl/C mass ratio")
+
+    if args.outgas == True:
+        parser.add_argument(
+            "--melt_frac", type=float, default=1.0, help="Melt fraction of the mantle"
+        )
+        parser.add_argument(
+            "--T_surf", type=float, default=2000.0, help="Surface temperature (K)"
+        )
+        parser.add_argument(
+            "--H_ocean",
+            type=float,
+            default=1.0,
+            help="H content in Earth oceans equivalent",
+        )
+        parser.add_argument("--CtoH", type=float, default=1.0, help="C/H mass ratio")
+        parser.add_argument("--NtoC", type=float, default=0.1, help="N/C mass ratio")
+        parser.add_argument(
+            "--fO2", type=float, default=0.0, help="Oxygen fugacity fO2 [delta IW]"
+        )
+        parser.add_argument("--StoC", type=float, default=None, help="S/C mass ratio")
+        parser.add_argument("--CltoC", type=float, default=None, help="Cl/C mass ratio")
+    else:
+        parser.add_argument(
+            "--a_H", type=float, default=1.0, help="H abundance"
+        )
+        parser.add_argument(
+            "--a_C", type=float, default=0.0, help="C abundance"
+        )
+        parser.add_argument(
+            "--a_O", type=float, default=0.0, help="O abundance"
+        )
+        parser.add_argument(
+            "--a_N", type=float, default=0.0, help="N abundance"
+        )
 
     args = parser.parse_args()
 
@@ -258,14 +301,23 @@ if __name__ == "__main__":
         log.error("Please set the HELIOS_PATH environment variable for testing.")
         sys.exit(1)
 
-    calculate_abundances(
-        output_dir=args.output_dir,
-        melt_frac=args.melt_frac,
-        T_surf=args.T_surf,
-        H_ocean=args.H_ocean,
-        CtoH=args.CtoH,
-        NtoC=args.NtoC,
-        fO2=args.fO2,
-        StoC=args.StoC,
-        CltoC=args.CltoC,
+    if args.outgas:
+        calculate_abundances_atmodeller(
+            output_dir=args.output_dir,
+            melt_frac=args.melt_frac,
+            T_surf=args.T_surf,
+            H_ocean=args.H_ocean,
+            CtoH=args.CtoH,
+            NtoC=args.NtoC,
+            fO2=args.fO2,
+            StoC=args.StoC,
+            CltoC=args.CltoC,
     )
+    else:
+        calculate_abundances_manual(
+            output_dir=args.output_dir,
+            a_H=args.a_H,
+            a_C=args.a_C,
+            a_O=args.a_O,
+            a_N=args.a_N,
+        )

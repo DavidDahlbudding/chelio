@@ -12,20 +12,28 @@ paths:
   helios_path: "${HELIOS_PATH}"
 
 simulation_params:
+  outgas_or_manual: "manual" # "outgas" or "manual"
   with_outgassed: False
   toa_pressure: 1.0e0
   internal_temp: 50
   surface_albedo: 0.1
+  # Atmodeller specific parameters
   melt_temp: 2000
   melt_frac: 1.0
-  h_ocean: 1.0
-  ctoh_ratio: 1.0
-  ntoc_ratio: 0.1
-  fO2: -3
-  stoc_ratio: null
-  cltoc_ratio: null
+  h_ocean: 1.0 # H content in Earth oceans equivalent
+  ctoh_ratio: 1.0 # C/H mass ratio
+  ntoc_ratio: 0.1 # N/C mass ratio
+  fO2: -3 # Oxygen fugacity fO2 [delta IW]
+  stoc_ratio: null # S/C mass ratio
+  cltoc_ratio: null # Cl/C mass ratio
   min_boa_pressure: 1.0e6 # dyn/cm^2 (1e6 = 1 bar)
   max_boa_pressure: 1.0e9 # dyn/cm^2
+  # Manual specific parameters
+  surface_pressure: 1.0e6 # dyn/cm^2 (1e6 = 1 bar)
+  a_h: 1.0 # H abundance
+  a_c: 0.0 # C abundance
+  a_o: 0.0 # O abundance
+  a_n: 0.0 # N abundance
 
 coupling:
   with_ggchem: True
@@ -33,9 +41,9 @@ coupling:
   i_max: 10 # Maximum coupling iterations
   i_full_convergence: 4 # Iteration to switch to full convergence
   rad_eq_criterion: 1.0e-8
-  helios_max_iter_initial: 300
-  helios_max_iter_intermediate: 10000
-  helios_max_iter_full: 30000
+  helios_max_iter_initial: 1000
+  helios_max_iter_intermediate: 2000
+  helios_max_iter_full: 4000
 
 logging:
   level: "INFO" # DEBUG, INFO, WARNING, ERROR, CRITICAL

@@ -15,22 +15,28 @@ def run_command(command, cwd, input=None):
         with subprocess.Popen(
             command,
             cwd=cwd,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1 # Use line-buffering
         ) as process:
-            # Read stdout line by line in real-time
-            last_line = ""
-            for line in process.stdout:
-                line = line.strip()
-                if line or last_line:
-                    # print(line)      # Print live to the console
-                    log.info(line)   # Also write to the log file
-                last_line = line
 
             if input is not None:
-                process.communicate(input=input)
+                stdout_output, stderr_output = process.communicate(input=input)
+                if stdout_output:
+                    for line in stdout_output.strip().split('\n'):
+                        if line:
+                            log.info(line)
+            else:
+                # Read stdout line by line in real-time
+                last_line = ""
+                for line in process.stdout:
+                    line = line.strip()
+                    if line or last_line:
+                        # print(line)      # Print live to the console
+                        log.info(line)   # Also write to the log file
+                    last_line = line
                 
             # Wait for the process to finish to get the return code
             process.wait()

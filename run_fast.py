@@ -72,7 +72,7 @@ def expand_env_vars(config):
 def main():
     # 1. PARSE ARGUMENTS
     parser = argparse.ArgumentParser(
-        description="Run a coupled HELIOS-GGchem simulation."
+        description="Run a coupled FastRT-GGchem simulation."
     )
     parser.add_argument(
         "--config", default="config.yaml", help="Path to the configuration file."
@@ -132,9 +132,7 @@ def main():
     if args.out_dir[-1] != "/":
         args.out_dir += "/"
     run_output_dir = os.path.join(chelio_path, args.out_dir, args.name)
-    run_output_dir_outgassed = os.path.join(chelio_path, args.out_dir, f"{args.name}_outgassed")
     os.makedirs(run_output_dir, exist_ok=True)
-    os.makedirs(run_output_dir_outgassed, exist_ok=True)
 
     # 4. SETUP LOGGING
     log = setup_logging(run_output_dir, config["logging"])
@@ -147,8 +145,13 @@ def main():
         boa_p_threshold = sim_p["boa_pressure_threshold"]
 
         # --- Initial abundance calculation and HELIOS run for outgassed atmosphere ---
+        run_output_dir_outgassed = os.path.join(chelio_path, args.out_dir, f"{args.name}_outgassed")
         outgassed_tp_file = os.path.join(run_output_dir_outgassed, f"{args.name}_outgassed_tp.dat")
-        if not os.path.exists(outgassed_tp_file):
+
+        if not os.path.exists(outgassed_tp_file) and sim_p["with_outgassed"]:
+
+            os.makedirs(run_output_dir_outgassed, exist_ok=True)
+
             abundances.calculate_abundances(
                 output_dir="helios",
                 melt_frac=sim_p["melt_frac"],
