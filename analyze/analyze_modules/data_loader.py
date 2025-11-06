@@ -192,7 +192,8 @@ class ChelioRun:
 
     def _process_data_frames(self, data_frames, mus_list, altitudes_list, convective_list):
         # get max number of layers
-        max_n_layers = max([df.shape[0] for df in data_frames])
+        #max_n_layers = max([df.shape[0] for df in data_frames])
+        max_n_layers = self.n_layers
         for idx, df in enumerate(data_frames):
             if df.shape[0] != max_n_layers:
                 df = np.pad(df, ((0, max_n_layers - df.shape[0]), (0, 0)), mode='constant', constant_values=np.nan)
