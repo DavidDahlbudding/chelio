@@ -265,7 +265,8 @@ def main():
         shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'), os.path.join(run_output_dir, f"{args.name}_tp_coupling_-1.dat"))
 
         log.info("Running initial GGchem calculation...")
-        external_runners.run_ggchem(ggchem_path)
+        input = "\n" * 210
+        external_runners.run_ggchem(ggchem_path, input=input)
         
         # --- Initialize Opacity Calculator ---
         # This is a placeholder for getting the species list dynamically
@@ -377,7 +378,8 @@ def main():
             shutil.copy(new_tp_profile_path, ggchem_pt_input)
 
             # Run GGchem
-            external_runners.run_ggchem(ggchem_path)
+            input = "\n" * 210
+            external_runners.run_ggchem(ggchem_path, input=input)
 
         log.info(f"--- Finalizing Simulation ---")
         # Final conversion of GGchem output

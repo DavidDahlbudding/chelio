@@ -36,7 +36,7 @@ simulation_params:
   a_n: 0.0001 # N abundance
 
 planet_params:
-  g: 1.0e3 # cm/s^2
+  g: 981 # cm/s^2
 
 coupling:
   with_ggchem: True
