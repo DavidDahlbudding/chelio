@@ -3,6 +3,12 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 # import pandas as pd # No longer needed
 
+import sys
+import os
+helios_source = os.environ["HELIOS_PATH"] + "/source"
+if helios_source not in sys.path:
+    sys.path.append(helios_source)
+from species_database import species_lib
 
 # Physical constants in cgs units
 H = 6.62607015e-27  # Planck constant (erg*s)
@@ -11,11 +17,30 @@ K_B = 1.380649e-16    # Boltzmann constant (erg/K)
 AMU = 1.660539e-24    # Atomic mass unit (g)
 
 
+def read_species_file(filepath):
+    """
+    Reads the species file and returns a list of species.
+    """
+    species = []
+    
+    with open(filepath, 'r') as f:
+        for line in f:
+            if line.startswith('species') or line.startswith('\n'):
+                continue
+            parts = line.split()
+            if parts[1] == 'yes':
+                species.append(parts[0])
+    species = np.array(species)
+
+    return species
+
 def read_opac_file(filepath):
     """
     Reads opacity data and grid parameters from an HDF5 file.
     Adapted from HELIOS source.
     """
+    # reading opacity file
+    print(f"Reading opacity file: {filepath}")
     with h5py.File(filepath, "r") as f:
         opac_k = f["kpoints"][:]
         wave = f["center wavelengths"][:]
@@ -78,28 +103,36 @@ class OpacityCalculator:
             opac_k = opac_k.reshape(len(ktemp), len(kpress), len(self.wave), len(self.gauss_y))
             
             # Create interpolator
-            points = (ktemp, kpress)
-            # This is a placeholder for a more sophisticated interpolation scheme if needed
-            # For now, we just store the raw data and will interpolate on the fly
-            # A more optimized version would interpolate to a common fine grid here.
+            points = (ktemp, np.log10(kpress))
             self.opac_data[species] = {
                 'interpolator': RegularGridInterpolator(points, opac_k, bounds_error=False, fill_value=None),
                 'ktemp': ktemp,
                 'kpress': kpress
             }
             
-    def get_rosseland_mean(self, T, P, mixing_ratios):
+    def get_rosseland_mean(self, T, P, mixing_ratios, mus):
         """
-        Calculates the Rosseland mean opacity for a given T, P, and composition.
+        Calculates the Rosseland mean opacity for a given T, P(dyn/cm^2), composition (mixing ratios) and mean molecular weight (g/mol).
         """
         total_opac_k = np.zeros((len(self.wave), len(self.gauss_y)))
         
-        for species, mix_ratio in mixing_ratios.items():
-            if species in self.opac_data and mix_ratio > 0:
+        for species in self.opac_data.keys():
+            try:
+                if species[:3] == 'CIA':
+                    cia_pair = species_lib[species].fc_name.replace("1", "").split('&')
+                    mix_ratio = mixing_ratios[cia_pair[0]] * mixing_ratios[cia_pair[1]]
+                else:
+                    mix_ratio = mixing_ratios[species]
+            except KeyError:
+                #print(f"Species {species} not found in mixing ratios")
+                continue
+            if mix_ratio > 0:
+                mu_weight = species_lib[species].weight/mus
                 interpolator = self.opac_data[species]['interpolator']
                 # The interpolator expects a (2,) point for (T, P)
-                opac_values = interpolator([T, P])[0] 
-                total_opac_k += mix_ratio * opac_values
+                T_bounded = np.maximum(T, 50) # avoid extrapolation to lower temperatures
+                opac_values = interpolator([T_bounded, np.log10(P)])[0]
+                total_opac_k += opac_values * mu_weight * mix_ratio
 
         # Avoid division by zero
         total_opac_k[total_opac_k < 1e-100] = 1e-100
@@ -112,17 +145,18 @@ class OpacityCalculator:
         """
         expanded_wave = self._expand_wave(self.inter_wave, self.gauss_y)
         dBdT = _dplanck_dT(expanded_wave, T)
+        dBdT[np.isnan(dBdT)] = np.finfo(float).eps
 
         # Numerator of Rosseland mean integral
-        num_integrated = np.sum(0.5 * self.delta_wave[:, None] * self.gauss_weight[None, :] * dBdT, axis=1)
+        num_integrated = np.sum(0.5 * self.delta_wave[:, None] * self.gauss_weight[None, :] * dBdT) #, axis=-1)
         numerator = np.sum(num_integrated)
 
         # Denominator of Rosseland mean integral
-        denom_integrated = np.sum(0.5 * self.delta_wave[:, None] * self.gauss_weight[None, :] * dBdT / opac_k, axis=1)
+        denom_integrated = np.sum(0.5 * self.delta_wave[:, None] * self.gauss_weight[None, :] * dBdT / opac_k)#, axis=(-1, -2))
         denominator = np.sum(denom_integrated)
         
         if denominator == 0:
-            return 1e-100 # return a small number if denominator is zero
+            return np.finfo(float).eps # return a small number if denominator is zero
 
         return numerator / denominator
 
@@ -151,7 +185,7 @@ def parse_mixfile(mixfile_path):
             - mix_ratios (dict): Dictionary of mixing ratios for each species.
     """
     with open(mixfile_path, 'r') as f:
-        header_line = f.readline().strip()
+        header_line = f.readline().strip().replace('\t', '')
         # The header can contain multiple spaces or tabs as delimiters
         header = [item for item in header_line.split(' ') if item]
 
@@ -175,13 +209,21 @@ def parse_mixfile(mixfile_path):
 
     return p_grid, mu_profile, species, mix_ratios
 
+def scale_height(T, mu_val, g):
+    """Scale height in cm"""
+    return K_B * T / (mu_val * AMU * g)
 
 def calculate_tp_profile(
     T_eff, p_surf, p_top, g, mu, nabla_ad,
-    opacity_calculator, mix_ratios_profile, target_p_grid
+    opacity_calculator, mix_ratios_profile, target_p_grid,
+    D=1.66
 ):
     """
     Calculates the 1D temperature-pressure profile of an atmosphere.
+    
+    Uses altitude (z) as primary coordinate following tsurf.py approach.
+    Integrates downward from top of atmosphere, calculating pressure from
+    hydrostatic equilibrium and tracking optical depth.
 
     Args:
         T_eff (float): Effective temperature of the planet (K).
@@ -193,69 +235,168 @@ def calculate_tp_profile(
         opacity_calculator (OpacityCalculator): Initialized OpacityCalculator instance.
         mix_ratios_profile (callable): Function mix_ratios(P) that returns a dict
                                       of mixing ratios.
-        target_p_grid (np.ndarray): The pressure grid for the final output.
+        target_p_grid (np.ndarray): The pressure grid for the final output (bar).
+        D (float): The diffusion coefficient (default: 1.66).
 
     Returns:
-        np.ndarray: Interpolated temperature profile on the target_p_grid.
-    """
-    # Lists to store the calculated profile
-    p_profile = []
-    T_profile = []
-
+        tuple: (interpolated_T, extra_info)
+            - interpolated_T: Temperature profile on target_p_grid (K)
+            - extra_info: dict with 'rosseland_mean', 'tau', 'z', 'T_r', 'p_r'
+    """ 
     # Initial conditions at the top of the atmosphere
-    p_current = p_top
-    T_current = T_eff / (2**0.25)
+    T_rad = T_eff * (2**(-0.25))  # Radiative temperature at top
+    
+    # Get initial atmospheric properties
+    mu_top = mu(p_top)
+    
+    # Initialize at the top of atmosphere
+    p_rad = p_top
+    T_prev = T_rad
+    p_prev = p_rad
     optical_depth = 0.0
+    z = 0.0
+    
+    # Flag to track if we've entered convective zone
+    convective_switch = 0
+    T_r = None  # Boundary temperature between radiative and convective
+    p_r = None  # Boundary pressure between radiative and convective
+    
+    # Storage for profile
+    z_profile = [z]
+    p_profile = [p_rad]
+    T_profile = [T_rad]
+    tau_profile = [optical_depth]
+    kappa_profile = [0.0]
 
-    p_profile.append(p_current)
-    T_profile.append(T_current)
-
-    # Downward integration using a while loop
-    while p_current < p_surf:
-        p_prev = p_current
-        T_prev = T_current
-        
-        # Get local atmospheric properties
+    # Adaptive step size initialization
+    delta_p_factor = 0.1
+    i_iter = 0
+    
+    # Downward integration loop
+    while p_prev < p_surf:
+        # Get current atmospheric properties
         current_mu = mu(p_prev)
         current_mix_ratios = mix_ratios_profile(p_prev)
-        kappa = opacity_calculator.get_rosseland_mean(T_prev, p_prev * 1e6, current_mix_ratios) # P in cgs
-
-        # Define pressure step based on maintaining roughly constant optical depth resolution
-        # This is a simple adaptive step-size approach
-        dp_cgs = (0.01 * g) / (kappa + 1e-10) # Target d_tau ~ 0.01
-        dp_bar = dp_cgs * 1e-6
         
-        # Ensure we don't overshoot the surface pressure
-        p_current = min(p_prev + dp_bar, p_surf)
+        # Radiative pressure at this altitude
+        #p_rad = p_surf * np.exp(-z / scale_height(T_rad, current_mu, g))
+        p_rad = p_prev * (1 + delta_p_factor)
         
-        # Calculate gradients at the previous layer
-        nabla_rad = (3 * kappa * (p_current - p_prev) * 1e6) / (16 * (5.67e-5 / np.pi) * T_prev**4 * g) * T_prev / p_prev
+        # Radiative temperature from optical depth
+        T_rad = T_eff * ((0.5 * (1 + D * optical_depth))**0.25)
+        
+        delta_z = scale_height((T_rad+T_prev)/2, current_mu, g) * np.log(p_rad / p_prev)
+        z = z - delta_z
 
-        # Check for convection
-        current_nabla_ad = nabla_ad(T_prev, p_prev)
-        if nabla_rad > current_nabla_ad: # Convective
-            T_current = T_prev * (p_current / p_prev)**current_nabla_ad
-        else: # Radiative
-            d_tau = kappa * (p_current - p_prev) * 1e6 / g
-            optical_depth += d_tau
-            T_current = T_eff * (0.5 * (1 + 1.5 * optical_depth))**0.25
+        # Calculate radiative gradient d(ln T)/d(ln P)
+        if p_rad > p_prev:
+            grad = (np.log(T_rad) - np.log(T_prev)) / (np.log(p_rad) - np.log(p_prev))
+        else:
+            grad = 0.0
+        
+        # Get adiabatic gradient for comparison
+        Delta = nabla_ad(T_prev, p_prev)
+        
+        # Check if we're in radiative or convective regime
+        if grad < Delta:
+            # Radiative zone
+            kr = opacity_calculator.get_rosseland_mean(T_rad, p_rad * 1e6, current_mix_ratios, current_mu)
+            #print('radiative', kr, T_rad, p_rad, current_mu)
             
-            # Fallback to convective if temperature decreases with depth (unphysical for pure radiative)
-            if T_current < T_prev:
-                 T_current = T_prev * (p_current / p_prev)**current_nabla_ad
+            # Update optical depth
+            d_tau = kr * (p_rad - p_prev) * 1e6 / g
+            optical_depth = optical_depth + d_tau
+            
+            # Calculate optical depth gradient for adaptive stepping
+            grad_opt = d_tau / delta_z
+            
+            T_prev = T_rad
+            p_prev = p_rad
+            
+        else:
+            # Convective zone
+            if convective_switch == 0:
+                # First time entering convective zone - mark boundary
+                T_r = T_rad
+                p_r = p_rad
+                convective_switch = 1
+            
+            # Iterative solution for convective temperature
+            # Need iteration because pressure depends on scale height H(T)
+            T_old = T_rad * 1.01
+            T_new = T_rad
+            
+            iteration_count = 0
+            max_iterations = 100
+            
+            while (np.abs((T_new - T_old) / T_new) > 1e-4) and (iteration_count < max_iterations):
+                current_mu_iter = mu(p_prev)
+                #p_conv = p_surf * np.exp(-z / scale_height(T_new, current_mu_iter, g))
+                p_conv = p_prev * (1 + delta_p_factor)
+                T_conv = T_r * ((p_conv / p_r)**Delta)
+                T_old = T_new
+                T_new = T_old + 0.1 * (T_conv - T_old)
+                iteration_count += 1
+            
+            # Get opacity at converged state
+            current_mix_ratios_conv = mix_ratios_profile(p_conv)
+            current_mu_conv = mu(p_conv)
+            kr = opacity_calculator.get_rosseland_mean(T_conv, p_conv * 1e6, current_mix_ratios_conv, current_mu_conv)
+            #print('convective', kr, T_conv, p_conv, current_mu_conv)
+            
+            # Update optical depth (tsurf.py does this in convective zones too)
+            d_tau = kr * (p_conv - p_prev) * 1e6 / g
+            optical_depth = optical_depth + d_tau
+            
+            T_rad = T_conv
+            T_prev = T_conv
+            p_prev = p_conv
+            
+            grad_opt = d_tau / delta_z
         
-        p_profile.append(p_current)
-        T_profile.append(T_current)
+        # Adaptive step size based on optical depth gradient
+        if grad_opt > 1e-8:
+            delta_p_factor = 0.01
+        else:
+            delta_p_factor = 0.1
+        
+        # Store current state
+        z_profile.append(z)
+        p_profile.append(p_prev)
+        T_profile.append(T_prev)
+        tau_profile.append(optical_depth)
+        kappa_profile.append(kr)
 
-        if p_current >= p_surf:
-            break
+        i_iter += 1
+        if i_iter % 100 == 0:
+            print(f'Iteration {i_iter}: P = {p_prev:.3e} bar, T = {T_prev:.3e} K')
+    
+    # Convert to arrays
+    z_profile = np.array(z_profile)
+    p_profile = np.array(p_profile)
+    T_profile = np.array(T_profile)
+    tau_profile = np.array(tau_profile)
+    kappa_profile = np.array(kappa_profile)
 
-    # Interpolate to the target pressure grid
-    interp_func = np.interp
+    z = z + z_profile[-1]
+    
+    # Interpolate to target pressure grid (in log space)
     log_p_profile = np.log10(p_profile)
     log_target_p_grid = np.log10(target_p_grid)
-    interpolated_T = interp_func(log_target_p_grid, log_p_profile, T_profile)
-
-    return interpolated_T
+    
+    interpolated_T = np.interp(log_target_p_grid, log_p_profile, T_profile)
+    interpolated_tau = np.interp(log_target_p_grid, log_p_profile, tau_profile)
+    interpolated_kappa = np.interp(log_target_p_grid, log_p_profile, kappa_profile)
+    interpolated_z = np.interp(log_target_p_grid, log_p_profile, z_profile)
+    
+    extra_info = {
+        'rosseland_mean': interpolated_kappa,
+        'tau': interpolated_tau,
+        'z': interpolated_z,
+        'T_r': T_r,
+        'p_r': p_r
+    }
+    
+    return interpolated_T, extra_info
 
 

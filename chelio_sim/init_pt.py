@@ -7,7 +7,7 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 
-def create_pt_profile(Teq, Pmin, Pmax, output_file=None):
+def create_pt_profile(Teq, Pmin, Pmax, output_file=None, return_data=False):
     """
     Creates an initial isothermal Pressure-Temperature (P-T) profile.
 
@@ -50,6 +50,9 @@ def create_pt_profile(Teq, Pmin, Pmax, output_file=None):
     except IOError as e:
         log.error(f"Failed to write P-T profile to {output_file}: {e}")
         raise
+
+    if return_data:
+        return P_bar, T_k
 
 
 if __name__ == "__main__":

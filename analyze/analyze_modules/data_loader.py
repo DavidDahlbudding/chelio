@@ -140,18 +140,22 @@ class ChelioRun:
                     elif len(d.shape) == 1:
                         d = d[np.newaxis, :]
                     data_frames.append(d)
-                    
+
                     # Load associated files
-                    mu_path = self.run_path / f"vertical_mix_{i}.dat"
+                    mu_path = self.run_path / f"vertical_mix_{index}.dat"
                     if mu_path.exists():
                         mus_list.append(np.loadtxt(mu_path, skiprows=1, usecols=3))
                     else: # If any file is missing, it's safer to add NaNs
                         mus_list.append(np.full(self.n_layers, np.nan))
                     
                     tp_path = self.run_path / f"{self.run_name}_tp.dat"
+                    tp_alt_path = self.run_path / f"extra_info_{index}.dat"
                     if tp_path.exists():
                         altitudes_list.append(np.loadtxt(tp_path, skiprows=2, usecols=3))
                         convective_list.append(np.loadtxt(tp_path, skiprows=2, usecols=6))
+                    elif tp_alt_path.exists():
+                        altitudes_list.append(np.loadtxt(tp_alt_path, skiprows=1, usecols=3))
+                        convective_list.append(np.loadtxt(tp_alt_path, skiprows=1, usecols=4))
                     else:
                         altitudes_list.append(np.full(self.n_layers, np.nan))
                         convective_list.append(np.full(self.n_layers, np.nan))
