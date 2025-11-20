@@ -136,7 +136,7 @@ def p_sat(T, species, mask=False):
         return np.empty_like(T)
 
 
-def append_profiles(header, data, ref_pt=os.path.join(os.environ["CHELIO_PATH"], "ggchem_inputs", "pt_helios.in")):
+def append_profiles(header, data, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in")):
     """
     Appends the data with the last step of itself (+ condensation) on the grid of the reference T-P profile.
 
@@ -201,7 +201,7 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["CHELIO_PATH"],
     return missing_data
 
 
-def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.path.join(os.environ["CHELIO_PATH"], "ggchem_inputs", "pt_helios.in")):
+def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in")):
     """
     Converts GGchem output (Static_Conc.dat) to a HELIOS mixfile.
 

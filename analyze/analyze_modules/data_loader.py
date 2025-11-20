@@ -85,10 +85,11 @@ class ChelioRun:
         self.dust_to_gas_mr: np.ndarray = np.array([])
         self.n_tots: np.ndarray = np.array([])
 
-    def read_data(self):
+    def read_data(self, ref_p_toa=1e-1):
         """
         Reads all data files associated with the run from disk.
         Optimized for 'last' load_mode to save memory.
+        ref_p_toa is the reference pressure at the top of the atmosphere in dyn/cm^2 (1e0 = 1e-6 bar)
         """
         i = 0
         last_valid_i = -1
@@ -175,7 +176,7 @@ class ChelioRun:
 
         self._process_data_frames(data_frames, mus_list, altitudes_list, convective_list)
         self._read_escape_time()
-        self._check_convergence(data_frames[-1])
+        self._check_convergence(data_frames[-1], ref_p_toa=ref_p_toa)
 
         #if self.load_mode == 'last' and not self.final_convergence_status:
         #    print(f"Run {self.run_name} did not converge, populating with NaNs")
@@ -252,12 +253,12 @@ class ChelioRun:
         self.iterations_read = np.array([np.nan])
 
 
-    def _check_convergence(self, last_data_frame):
+    def _check_convergence(self, last_data_frame, ref_p_toa=1e-1):
         # Based on comments and logic from notebooks, a run has not converged if:
         # 1. The final pressure in the top layer is not 1e-1 dyn/cm^2.
         # 2. The temperature profile is a dummy array of all 1.001 K.
         # This logic is more robust than the original notebook code.
-        failed_pressure = last_data_frame[-1, 2] != 1e-1
+        failed_pressure = last_data_frame[-1, 2] != ref_p_toa
         failed_temperature = np.all(last_data_frame[:, 0] == 1.001)
 
         if failed_pressure or failed_temperature:

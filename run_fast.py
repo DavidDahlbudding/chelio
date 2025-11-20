@@ -298,9 +298,9 @@ def main():
 
             # Convert GGchem output to HELIOS mixfile
             ggchem_output = os.path.join(ggchem_path, "Static_Conc.dat")
+            shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i}.dat"))
             helios_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i}.dat")
             mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
-            shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i}.dat"))
 
             # --- Fast T-P Calculation ---
             p_grid, mu_profile, species, mix_ratios = parse_mixfile(helios_mixfile)
@@ -383,9 +383,9 @@ def main():
 
         log.info(f"--- Finalizing Simulation ---")
         # Final conversion of GGchem output
+        shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
         final_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i+1}.dat")
         mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile)
-        shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
 
         log.info(f"Simulation '{args.name}' completed.")
 

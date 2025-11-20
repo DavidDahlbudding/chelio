@@ -15,7 +15,7 @@ simulation_params:
   outgas_or_manual: "manual" # "outgas" or "manual"
   with_outgassed: False
   toa_pressure: 1.0e0
-  internal_temp: 50
+  internal_temp: 150
   surface_albedo: 0.1
   # Atmodeller specific parameters
   melt_temp: 2000
@@ -30,10 +30,10 @@ simulation_params:
   max_boa_pressure: 1.0e9 # dyn/cm^2
   # Manual specific parameters
   surface_pressure: 1.0e8 # dyn/cm^2 (1e6 = 1 bar)
-  a_h: 0.99 # H abundance
-  a_c: 0.00371 # C abundance
-  a_o: 0.0062893081761006345 # O abundance
-  a_n: 0.0001 # N abundance
+  a_h: 0.01 # H abundance
+  a_c: 0.01 # C abundance
+  a_o: 0.01 # O abundance
+  a_n: 1.0 # N abundance
 
 planet_params:
   g: 981 # cm/s^2
