@@ -15,7 +15,7 @@ simulation_params:
   outgas_or_manual: "manual" # "outgas" or "manual"
   with_outgassed: False
   toa_pressure: 1.0e0
-  internal_temp: 150
+  internal_temp: 125
   surface_albedo: 0.1
   # Atmodeller specific parameters
   melt_temp: 2000
@@ -30,8 +30,8 @@ simulation_params:
   max_boa_pressure: 1.0e9 # dyn/cm^2
   # Manual specific parameters
   surface_pressure: 1.0e8 # dyn/cm^2 (1e6 = 1 bar)
-  a_h: 0.01 # H abundance
-  a_c: 0.01 # C abundance
+  a_h: 1.0 # H abundance
+  a_c: 0.5 # C abundance
   a_o: 0.01 # O abundance
   a_n: 1.0 # N abundance
 
@@ -41,7 +41,7 @@ planet_params:
 coupling:
   with_ggchem: True
   i_min: 0 # Starting coupling iteration
-  i_max: 10 # Maximum coupling iterations
+  i_max: 50 # Maximum coupling iterations
   i_full_convergence: 4 # Iteration to switch to full convergence
   rad_eq_criterion: 1.0e-8
   helios_max_iter_initial: 1000

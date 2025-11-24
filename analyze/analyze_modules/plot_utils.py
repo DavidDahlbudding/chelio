@@ -189,6 +189,7 @@ def plot_all_iteration_profiles(
     ax=None, 
     cmap_name='viridis', 
     mol_type: str = 'mol',
+    legend: bool = True,
     **kwargs
 ):
     """
@@ -231,7 +232,9 @@ def plot_all_iteration_profiles(
         
         ax.plot(x_data, y_data, color=color, label=label, **kwargs)
     
-    ax.legend()
+    if legend:
+        ax.legend()
+
     return fig, ax
 
 def _get_scalar_data(run: ChelioRun, y_param_key: str, layer_idx: int):

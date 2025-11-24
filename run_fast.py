@@ -340,6 +340,10 @@ def main():
                 D=2.0
             )
 
+            if i >= i_full:
+                eps = 0.0
+                new_T_profile = new_T_profile * (1 - eps) + old_T_profile * eps
+
             # Save the new T-P profile in a format GGchem can read
             # The format is simple: two columns, Pressure (dyn/cm^2) and Temperature (K)
             new_tp_profile_path = os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i}.dat")
@@ -387,10 +391,21 @@ def main():
         final_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i+1}.dat")
         mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile)
 
+        # remove database.dat in ggchem_path
+        try:
+            os.remove(os.path.join(ggchem_path, "database.dat"))
+        except FileNotFoundError:
+            pass
+
         log.info(f"Simulation '{args.name}' completed.")
 
     except Exception:
         log.critical("An unhandled error occurred during the simulation.", exc_info=True)
+        # remove database.dat in ggchem_path
+        try:
+            os.remove(os.path.join(ggchem_path, "database.dat"))
+        except FileNotFoundError:
+            pass
         sys.exit(1)
 
 
