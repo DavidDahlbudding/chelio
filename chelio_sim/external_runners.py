@@ -81,6 +81,10 @@ def run_helios(helios_path, params):
         command.extend(["-path_to_temperature_file", params['path_to_temperature_file']])
     if 'file_with_vertical_mixing_ratios' in params:
         command.extend(["-file_with_vertical_mixing_ratios", params['file_with_vertical_mixing_ratios']])
+    if 'kappa_value' in params:
+        command.extend(["-kappa_value", str(params['kappa_value'])])
+    if 'kappa_file_path' in params:
+        command.extend(["-kappa_file_path", params['kappa_file_path']])
     if 'started_convection' in params:
          command.extend(["-started_convection", str(params['started_convection'])])
 

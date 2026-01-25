@@ -55,7 +55,7 @@ opacity mixing =                                      on-the-fly                
 === === CONVECTIVE ADJUSTMENT === ===
 
 convective adjustment =                               yes                             [yes, no]                                    (CL: Y)
-kappa value =                                         0.285714                        [file, number > 0]                           (CL: Y) 
+kappa value =                                         file                            [file, number > 0]                           (CL: Y) 
   file --> kappa file path =                          ./input/delad_example.dat       [file path]                                  (CL: Y)
 
 === === STELLAR AND PLANETARY PARAMETERS === ===
@@ -121,5 +121,5 @@ physical timestep [s] =                          no                         [no,
 include additional heating =                     no                         [yes, no]                                                      (CL: Y)
   yes --> path to heating file =                 ./input/heating_file.txt   [file path]                                                    (CL: Y)
   yes --> heating file format =                  1 Pressure cgs Heating 1e7 [#skip, press.col., press.unit[cgs,Pa,bar], data, cgs factor]  (CL: N)
-coupling --> write TP profile during run =       0                          [0 (=no), number > 0]                                                (CL: Y)
+coupling --> write TP profile during run =       0                          [0 (=no), number > 0]                                          (CL: Y)
 coupling --> convergence criterion =             1e-3                       [number > 0]                                                   (CL: Y) 

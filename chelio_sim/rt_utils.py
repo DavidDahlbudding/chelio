@@ -77,12 +77,13 @@ class OpacityCalculator:
     """
     Manages loading, interpolating, and calculating Rosseland mean opacities.
     """
-    def __init__(self, species_list, opacity_paths, T_grid, P_grid):
+    def __init__(self, species_list, opacity_paths, T_grid, P_grid, mode='lin'):
         self.species = species_list
         self.opacity_paths = opacity_paths
         self.T_grid = T_grid
         self.P_grid = P_grid
         self.opac_data = {}
+        self.mode = mode
         self._load_and_interpolate_opacities()
 
     def _load_and_interpolate_opacities(self):
@@ -101,6 +102,13 @@ class OpacityCalculator:
         for species in self.species:
             opac_k, _, _, _, _, ktemp, kpress = read_opac_file(self.opacity_paths[species])
             opac_k = opac_k.reshape(len(ktemp), len(kpress), len(self.wave), len(self.gauss_y))
+
+            if self.mode == 'lin':
+                opac_k = opac_k
+            elif self.mode == 'log':
+                opac_k = np.log10(opac_k)
+            else:
+                raise ValueError(f"Unknown mode '{self.mode}'; choose 'lin' or 'log'")
             
             # Create interpolator
             points = (ktemp, np.log10(kpress))
@@ -132,6 +140,12 @@ class OpacityCalculator:
                 # The interpolator expects a (2,) point for (T, P)
                 T_bounded = np.maximum(T, 50) # avoid extrapolation to lower temperatures
                 opac_values = interpolator([T_bounded, np.log10(P)])[0]
+                if self.mode == 'lin':
+                    opac_values = opac_values
+                elif self.mode == 'log':
+                    opac_values = 10**opac_values
+                else:
+                    raise ValueError(f"Unknown mode '{self.mode}'; choose 'lin' or 'log'")
                 total_opac_k += opac_values * mu_weight * mix_ratio
 
         # Avoid division by zero
@@ -267,6 +281,7 @@ def calculate_tp_profile(
     T_profile = [T_rad]
     tau_profile = [optical_depth]
     kappa_profile = [0.0]
+    Delta_profile = [nabla_ad(T_rad, p_rad)]
 
     # Adaptive step size initialization
     delta_p_factor = 0.1
@@ -366,6 +381,7 @@ def calculate_tp_profile(
         T_profile.append(T_prev)
         tau_profile.append(optical_depth)
         kappa_profile.append(kr)
+        Delta_profile.append(Delta)
 
         i_iter += 1
         if i_iter % 100 == 0:
@@ -377,7 +393,7 @@ def calculate_tp_profile(
     T_profile = np.array(T_profile)
     tau_profile = np.array(tau_profile)
     kappa_profile = np.array(kappa_profile)
-
+    Delta_profile = np.array(Delta_profile)
     z = z + z_profile[-1]
     
     # Interpolate to target pressure grid (in log space)
@@ -388,13 +404,15 @@ def calculate_tp_profile(
     interpolated_tau = np.interp(log_target_p_grid, log_p_profile, tau_profile)
     interpolated_kappa = np.interp(log_target_p_grid, log_p_profile, kappa_profile)
     interpolated_z = np.interp(log_target_p_grid, log_p_profile, z_profile)
+    interpolated_Delta = np.interp(log_target_p_grid, log_p_profile, Delta_profile)
     
     extra_info = {
         'rosseland_mean': interpolated_kappa,
         'tau': interpolated_tau,
         'z': interpolated_z,
         'T_r': T_r,
-        'p_r': p_r
+        'p_r': p_r,
+        'nabla_ad': interpolated_Delta
     }
     
     return interpolated_T, extra_info

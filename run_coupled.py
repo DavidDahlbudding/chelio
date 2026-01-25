@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import yaml
+import numpy as np
 
 # Import the refactored modules
 from chelio_sim import abundances, external_runners, init_pt, mixfile_utils
@@ -80,6 +81,18 @@ def main():
     parser.add_argument("--out_dir", default="output", help="Root output directory.")
     parser.add_argument("--outgas_or_manual", default="manual", help="Outgassing or manual mode.")
     parser.add_argument("--with_outgassed", default=False, help="Whether to use outgassed atmosphere.")
+    parser.add_argument(
+        "--chemistry_mode", 
+        choices=["ggchem", "constant"], 
+        default="ggchem",
+        help="Chemistry mode: 'ggchem' for equilibrium chemistry, 'constant' for constant mixing ratios with condensation."
+    )
+    parser.add_argument(
+        "--constant_mixing_ratios",
+        type=str,
+        default=None,
+        help="Constant mixing ratios as comma-separated key=value pairs (e.g., 'N2=0.5,CH4=0.5,CO2=0.0,H2=0.0,H2O=0.0'). Overrides config."
+    )
 
     # Add overrides for key simulation parameters
     sim_params = [
@@ -119,6 +132,22 @@ def main():
     for param in sim_params:
         if getattr(args, param) is not None:
             config["simulation_params"][param] = getattr(args, param)
+    
+    # Apply chemistry_mode override
+    if args.chemistry_mode is not None:
+        config["coupling"]["chemistry_mode"] = args.chemistry_mode
+    # Default to ggchem if not specified
+    if "chemistry_mode" not in config.get("coupling", {}):
+        config.setdefault("coupling", {})["chemistry_mode"] = "ggchem"
+
+    # Apply constant_mixing_ratios override from command line
+    if args.constant_mixing_ratios is not None:
+        # Parse comma-separated key=value pairs: "N2=0.5,CH4=0.5,CO2=0.0"
+        mixing_ratios = {}
+        for pair in args.constant_mixing_ratios.split(","):
+            key, value = pair.strip().split("=")
+            mixing_ratios[key.strip()] = float(value.strip())
+        config["simulation_params"]["constant_mixing_ratios"] = mixing_ratios
 
     # 3. SETUP PATHS AND DIRECTORIES
     chelio_path = config["paths"].get("chelio_path") or Path(__file__).parent.resolve()
@@ -207,69 +236,93 @@ def main():
         else:
             log.info(f"Skipping initial outgassed HELIOS run as {outgassed_tp_file} already exists or outgassing is disabled.")
 
-        if not config["coupling"]["with_ggchem"]:
+        if not config["coupling"]["with_ggchem"] and config["coupling"]["chemistry_mode"] == "ggchem":
             log.info("`with_ggchem` is False. Exiting after initial HELIOS run.")
             sys.exit(0)
 
-        # if GGchem/database.dat exists, remove it
-        #if os.path.exists(os.path.join(ggchem_path, "database.dat")):
-        #    os.remove(os.path.join(ggchem_path, "database.dat"))
-        #    log.info("Removed GGchem/database.dat")
+        # --- Determine chemistry mode ---
+        chemistry_mode = config["coupling"]["chemistry_mode"]
+        log.info(f"Chemistry mode: {chemistry_mode}")
 
-        # --- Initial GGchem Setup and Run ---
-        log.info("Initializing GGchem with initial abundances and P-T profile...")
-        if sim_p["outgas_or_manual"] == "outgas":
-            abundances.calculate_abundances_atmodeller(
-                output_dir="ggchem",
-                melt_frac=sim_p["melt_frac"],
-                T_surf=sim_p["melt_temp"],
-                H_ocean=sim_p["h_ocean"],
-                CtoH=sim_p["ctoh_ratio"],
-                NtoC=sim_p["ntoc_ratio"],
-                fO2=sim_p["fO2"],
-                StoC=sim_p["stoc_ratio"],
-                CltoC=sim_p["cltoc_ratio"],
-            )
-            #os.remove(os.path.join(ggchem_path, "database.dat"))
-            p_boa_path = os.path.join(chelio_path, "helios_inputs", "P_BOA.dat")
-            with open(p_boa_path, "r") as f:
-                boa_p = float(f.read().strip())
+        # --- Initial Setup ---
+        if chemistry_mode == "ggchem":
+            log.info("Initializing GGchem with initial abundances and P-T profile...")
+            if sim_p["outgas_or_manual"] == "outgas":
+                abundances.calculate_abundances_atmodeller(
+                    output_dir="ggchem",
+                    melt_frac=sim_p["melt_frac"],
+                    T_surf=sim_p["melt_temp"],
+                    H_ocean=sim_p["h_ocean"],
+                    CtoH=sim_p["ctoh_ratio"],
+                    NtoC=sim_p["ntoc_ratio"],
+                    fO2=sim_p["fO2"],
+                    StoC=sim_p["stoc_ratio"],
+                    CltoC=sim_p["cltoc_ratio"],
+                )
+                p_boa_path = os.path.join(chelio_path, "helios_inputs", "P_BOA.dat")
+                with open(p_boa_path, "r") as f:
+                    boa_p = float(f.read().strip())
 
-            if boa_p < float(min_boa_pressure):
-                log.error(f"P_BOA ({boa_p}) is less than {min_boa_pressure} dyn/cm^2. Exiting...")
-                sys.exit(1)
-            elif boa_p > float(max_boa_pressure):
-                log.error(f"P_BOA ({boa_p}) is greater than {max_boa_pressure} dyn/cm^2. Exiting...")
-                sys.exit(1)
+                if boa_p < float(min_boa_pressure):
+                    log.error(f"P_BOA ({boa_p}) is less than {min_boa_pressure} dyn/cm^2. Exiting...")
+                    sys.exit(1)
+                elif boa_p > float(max_boa_pressure):
+                    log.error(f"P_BOA ({boa_p}) is greater than {max_boa_pressure} dyn/cm^2. Exiting...")
+                    sys.exit(1)
 
-            log.info(f"P_BOA ({boa_p}) is within the range of {min_boa_pressure} to {max_boa_pressure} dyn/cm^2.")
+                log.info(f"P_BOA ({boa_p}) is within the range of {min_boa_pressure} to {max_boa_pressure} dyn/cm^2.")
+                
+                shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'species.dat'), run_output_dir)
+                shutil.copy(p_boa_path, os.path.join(run_output_dir, "P_BOA.dat"))
+            else:
+                abundances.calculate_abundances_manual(
+                    output_dir="ggchem",
+                    a_H=sim_p["a_h"],
+                    a_C=sim_p["a_c"],
+                    a_O=sim_p["a_o"],
+                    a_N=sim_p["a_n"],
+                )
+                boa_p = float(sim_p["surface_pressure"])
+
+            P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
+
+            # Prepare GGchem's working directory
+            shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'abundances.in'), os.path.join(ggchem_path, 'abund_helios.in'))
+            ggchem_pt_input = os.path.join(ggchem_path, 'structures', 'pt_helios.in')
+            shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'), ggchem_pt_input)
+            shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'param.in'), os.path.join(ggchem_path, 'input', 'param_helios.in'))
             
-            shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'species.dat'), run_output_dir)
-            shutil.copy(p_boa_path, os.path.join(run_output_dir, "P_BOA.dat"))
-        else:
-            abundances.calculate_abundances_manual(
-                output_dir="ggchem",
-                a_H=sim_p["a_h"],
-                a_C=sim_p["a_c"],
-                a_O=sim_p["a_o"],
-                a_N=sim_p["a_n"],
-            )
-            boa_p = float(sim_p["surface_pressure"])
+            # Archive initial inputs
+            shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'abundances.in'), run_output_dir)
+            shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'), os.path.join(run_output_dir, f"{args.name}_tp_coupling_-1.dat"))
 
-        init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p)
-
-        # Prepare GGchem's working directory
-        shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'abundances.in'), os.path.join(ggchem_path, 'abund_helios.in'))
-        ggchem_pt_input = os.path.join(ggchem_path, 'structures', 'pt_helios.in')
-        shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'), ggchem_pt_input)
-        shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'param.in'), os.path.join(ggchem_path, 'input', 'param_helios.in'))
+            log.info("Running initial GGchem calculation...")
+            external_runners.run_ggchem(ggchem_path)
         
-        # Archive initial inputs
-        shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'abundances.in'), run_output_dir)
-        shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'), os.path.join(run_output_dir, f"{args.name}_tp_coupling_-1.dat"))
-
-        log.info("Running initial GGchem calculation...")
-        external_runners.run_ggchem(ggchem_path)
+        elif chemistry_mode == "constant":
+            log.info("Using constant mixing ratios with condensation limits...")
+            
+            # Get constant mixing ratios from config
+            if "constant_mixing_ratios" not in sim_p:
+                log.error("constant_mixing_ratios not found in simulation_params. Please specify mixing ratios in config.")
+                sys.exit(1)
+            
+            constant_mixing_ratios = sim_p["constant_mixing_ratios"]
+            log.info(f"Constant mixing ratios: {constant_mixing_ratios}")
+            
+            # Get surface pressure
+            boa_p = float(sim_p["surface_pressure"])
+            
+            # Create initial P-T profile
+            P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
+            
+            # Save initial P-T profile
+            initial_tp_path = os.path.join(run_output_dir, f"{args.name}_tp_coupling_-1.dat")
+            np.savetxt(initial_tp_path, np.vstack([P_bar, T_k]).T, fmt="%.6e", header="# P [bar], T [K]", comments="")
+            
+            # Create initial mixfile with constant mixing ratios
+            initial_mixfile = os.path.join(run_output_dir, "vertical_mix_initial.dat")
+            mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile)
         
         # --- Coupling Loop ---
         i_min = config["coupling"]["i_min"]
@@ -279,11 +332,17 @@ def main():
         started_convection = 0
         coupling_speed_up = "no"
 
-        # Convert GGchem output to HELIOS mixfile
-        ggchem_output = os.path.join(ggchem_path, "Static_Conc.dat")
-        shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i_min}.dat"))
+        # Initial mixfile creation
         helios_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i_min}.dat")
-        mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
+        
+        if chemistry_mode == "ggchem":
+            # Convert GGchem output to HELIOS mixfile
+            ggchem_output = os.path.join(ggchem_path, "Static_Conc.dat")
+            shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i_min}.dat"))
+            mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
+        elif chemistry_mode == "constant":
+            # Create mixfile with constant mixing ratios
+            mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, helios_mixfile)
 
         for i in range(i_min, i_max + 1):
             log.info(f"--- Coupling Iteration: {i} ---")
@@ -315,6 +374,8 @@ def main():
                 "path_to_species_file": os.path.join(chelio_path, "helios_inputs", "species.dat"),
                 "file_with_vertical_mixing_ratios": helios_mixfile,
                 "path_to_temperature_file": os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i-1}.dat"),
+                "kappa_value": "file",
+                "kappa_file_path": mixfile_utils.DEFAULT_DELAD_TABLE_PATH,
                 "coupling_mode": "yes",
                 "coupling_iteration_step": i,
                 "coupling_speed_up": coupling_speed_up,
@@ -334,32 +395,61 @@ def main():
                     log.info("Coupling converged. Stopping iterations.")
                     break
 
-            # Prepare for next GGchem run
+            # Prepare for next iteration
             new_tp_profile = os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i}.dat")
-            shutil.copy(new_tp_profile, os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'))
-            shutil.copy(new_tp_profile, ggchem_pt_input)
-
-            # Run GGchem
-            # in case input is required, input 200 times newline
-            input = "\n" * 210
-            external_runners.run_ggchem(ggchem_path, input=input)
-            # remove database.dat in ggchem_path
-            #os.remove(os.path.join(ggchem_path, "database.dat"))
-            # Convert GGchem output to HELIOS mixfile
-            shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
             helios_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i+1}.dat")
-            mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
+            
+            if chemistry_mode == "ggchem":
+                # Copy new T-P profile to GGchem input and run GGchem
+                shutil.copy(new_tp_profile, os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'))
+                shutil.copy(new_tp_profile, ggchem_pt_input)
+
+                # Run GGchem
+                # in case input is required, input 200 times newline
+                input = "\n" * 210
+                external_runners.run_ggchem(ggchem_path, input=input)
+                
+                # Convert GGchem output to HELIOS mixfile
+                shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
+                mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
+            
+            elif chemistry_mode == "constant":
+                # Read the new T-P profile and create updated mixfile with condensation
+                tp_data = np.loadtxt(new_tp_profile, skiprows=1)
+                P_bar_new = tp_data[:, 0]
+                T_k_new = tp_data[:, 1]
+                mixfile_utils.create_constant_mixfile(P_bar_new, T_k_new, constant_mixing_ratios, helios_mixfile)
 
         log.info(f"--- Finalizing Simulation ---")
-        # Final conversion of GGchem output
+        # Final conversion/creation of mixfile
         final_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i+1}.dat")
-        mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile)
-        shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
+        
+        if chemistry_mode == "ggchem":
+            mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile)
+            shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
+            # remove database.dat in ggchem_path
+            try:
+                os.remove(os.path.join(ggchem_path, "database.dat"))
+            except FileNotFoundError:
+                pass
+        elif chemistry_mode == "constant":
+            # Create final mixfile with final T-P profile
+            final_tp = os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i}.dat")
+            tp_data = np.loadtxt(final_tp, skiprows=1)
+            P_bar_final = tp_data[:, 0]
+            T_k_final = tp_data[:, 1]
+            mixfile_utils.create_constant_mixfile(P_bar_final, T_k_final, constant_mixing_ratios, final_mixfile)
 
         log.info(f"Simulation '{args.name}' completed.")
 
     except Exception:
         log.critical("An unhandled error occurred during the simulation.", exc_info=True)
+        # remove database.dat in ggchem_path (only if using ggchem mode)
+        if config.get("coupling", {}).get("chemistry_mode") == "ggchem":
+            try:
+                os.remove(os.path.join(ggchem_path, "database.dat"))
+            except FileNotFoundError:
+                pass
         sys.exit(1)
 
 

@@ -2,8 +2,11 @@ import logging
 import os
 import sys
 import time
+from math import ceil
+from typing import Sequence
 
 import numpy as np
+from scipy.interpolate import interp1d
 
 log = logging.getLogger(__name__)
 
@@ -18,10 +21,193 @@ except (ImportError, KeyError):
     )
     raise
 
+names = np.array(['H2', 'He', 'N2', 'CH4', 'O2', 'CO2', 'H2O', 'NH3', 'CO'])
+masses = np.array([2.016, 4.0026, 28.0134, 16.0425, 31.9988, 44.0095, 18.0153, 17.031, 28.010]) # amu
+# from https://en.wikipedia.org/wiki/Triple_point
+triple_Ts = np.array([13.8033, 2.1768, 63.18, 90.68, 54.36, 216.55, 273.16, 195.4, 68.1]) # K
+triple_Ps = np.array([7.04e3, 5.048e3, 12.6e3, 11.7e3, 0.144e3, 517e3, 0.611657e3, 6.06e3, 15.37e3]) # Pa
+triple_Ps *= 1e1 # to dyn/cm^2
+# from https://en.wikipedia.org/wiki/Critical_point_(thermodynamics)
+critical_Ts = np.array([33.20, 5.19, 126.2, 190.8, 154.33, 304.19, 647.1, 405.5, 133.16]) # K
+critical_Ps = np.array([1.300e6, 0.227e6, 3.39e6, 4.64e6, 5.043e6, 7.38e6, 22.06e6, 11.28e6, 3.498e6]) # Pa
+critical_Ps *= 1e1 # to dyn/cm^2
+
+mol_dict = {name: {'mass': mass, 'triple': [Tt, Pt], 'critical': [Tc, Pc]} for name, mass, Tt, Pt, Tc, Pc in zip(names, masses, triple_Ts, triple_Ps, critical_Ts, critical_Ps)}
+
 # psat from GGchem
 mmHg = 1.3328e+03 # dyn/cm^2
 bar = 1.0e+06 # dyn/cm^2
 kB = 1.380649e-16 # erg/K
+R = 8.314462618e7 # erg/(K mol)
+
+_J_TO_ERG = 1e7
+
+# Default location for HELIOS pre-tabulated kappa/delad + c_p table.
+# We overwrite this file for each iteration/run; HELIOS will write the 1D profile in the run output.
+DEFAULT_DELAD_TABLE_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "../helios_inputs/delad_chelio.dat")
+)
+
+_CP_INTERP_CACHE = {}
+
+
+def _validate_log10_pressure_grid(p_bar: np.ndarray, rtol: float = 1e-2, atol: float = 1e-1) -> None:
+    """Validate that log10(P) spacing is constant (HELIOS requirement for delad tables)."""
+    if p_bar.ndim != 1:
+        raise ValueError("Pressure grid must be 1D")
+    if len(p_bar) < 2:
+        raise ValueError("Pressure grid must have at least 2 points")
+    if np.any(~np.isfinite(p_bar)) or np.any(p_bar <= 0):
+        raise ValueError("Pressure grid must be finite and strictly positive")
+    logp = np.log10(p_bar)
+    dlogp = np.diff(logp)
+    if not np.allclose(dlogp, dlogp[0], rtol=rtol, atol=atol):
+        print("max log10(P) differences:", np.abs(dlogp - dlogp[0]).max(), "at:", logp[np.abs(dlogp - dlogp[0]).argmax()])
+        raise ValueError(
+            "Pressure grid must have constant spacing in log10(P) for HELIOS kappa/delad tables"
+        )
+
+
+def _get_janaf_cp_interpolator(species: str):
+    """Return Cp(T) interpolator from GGchem JANAF tables.
+
+    Expected JANAF format: skip 3 header rows; first two columns are T[K] and Cp[J mol^-1 K^-1].
+    """
+    if species in _CP_INTERP_CACHE:
+        return _CP_INTERP_CACHE[species]
+
+    ggchem_path = os.environ.get("GGCHEM_PATH")
+    if not ggchem_path:
+        raise KeyError("GGCHEM_PATH environment variable not set")
+
+    janaf_file = os.path.join(ggchem_path, "data", "JANAF", f"{species}.txt")
+    cp_data = np.loadtxt(janaf_file, skiprows=3)[:, :2]
+    interp = interp1d(cp_data[:, 0], cp_data[:, 1], bounds_error=False, fill_value="extrapolate")
+    _CP_INTERP_CACHE[species] = interp
+    return interp
+
+
+def write_helios_delad_table(
+    p_bar: np.ndarray,
+    t_profile_k: np.ndarray,
+    species: Sequence[str],
+    vmr_profile: np.ndarray,
+    out_path: str = DEFAULT_DELAD_TABLE_PATH,
+    t_step_max_k: float = 25.0,
+    ignore_missing_cp_below_vmr: float = 1e-20,
+) -> str:
+    """Write a HELIOS standard-format pre-tabulated kappa/delad (+ c_p) file.
+
+    Inputs:
+    - p_bar: 1D pressure grid [bar], must be constant spacing in log10(P)
+    - t_profile_k: 1D temperature profile on the same pressure grid [K]
+    - species: list of species names matching columns in vmr_profile
+    - vmr_profile: 2D array shape (nP, nSpecies), assumed to be mole fractions (VMR)
+
+    Output file format must match HELIOS' example (2-line header, then columns):
+    temp.[K]  press.[1e-6bar]  delad  c_p[erg mol^-1 K^-1]  log_S[log10(erg g^-1 K^-1)]
+
+    Notes:
+    - Pressure column is in 1e-6 bar units (= dyn/cm^2), i.e. P_out = P_bar * 1e6.
+    - c_p is mixture molar heat capacity in cgs (erg mol^-1 K^-1), using JANAF Cp in J mol^-1 K^-1.
+    - delad (kappa) is computed as R_universal / c_p (dimensionless).
+    - entropy column is written as 0 (optional in HELIOS and unused by RT).
+    """
+    p_bar = np.asarray(p_bar, dtype=float)
+    t_profile_k = np.asarray(t_profile_k, dtype=float)
+    vmr_profile = np.asarray(vmr_profile, dtype=float)
+
+    _validate_log10_pressure_grid(p_bar)
+
+    if t_profile_k.ndim != 1 or len(t_profile_k) != len(p_bar):
+        raise ValueError("t_profile_k must be 1D and same length as p_bar")
+    if vmr_profile.ndim != 2 or vmr_profile.shape[0] != len(p_bar) or vmr_profile.shape[1] != len(species):
+        raise ValueError("vmr_profile must have shape (nP, nSpecies)")
+
+    # Build linear T grid with constant steps, step size <= t_step_max_k.
+    t_min = float(np.nanmin(t_profile_k))
+    t_max = float(np.nanmax(t_profile_k))
+    if not np.isfinite(t_min) or not np.isfinite(t_max):
+        raise ValueError("Temperature profile contains non-finite values")
+    if t_max < t_min:
+        t_min, t_max = t_max, t_min
+    n_intervals = int(ceil(max(t_max - t_min, 0.0) / float(t_step_max_k)))
+    n_intervals = max(n_intervals, 1)
+    t_grid = np.linspace(t_min, t_max, n_intervals + 1)
+
+    # Normalize VMRs (mole fractions) per layer to avoid small GGchem truncation effects.
+    vmr = np.clip(vmr_profile, 0.0, np.inf)
+    vmr_sum = vmr.sum(axis=1)
+    if np.any(vmr_sum <= 0):
+        raise ValueError("VMR profile sums to <= 0 in at least one layer")
+    vmr = vmr / vmr_sum[:, np.newaxis]
+
+    # Load Cp interpolators; allow skipping species with tiny VMR if Cp file missing.
+    kept_species = []
+    kept_vmr_cols = []
+    kept_cp = []
+    for j, s in enumerate(species):
+        if s.startswith("CIA"):
+            # CIA entries are not real gas species for thermodynamics.
+            continue
+
+        max_vmr = float(np.nanmax(vmr[:, j]))
+        try:
+            cp_interp = _get_janaf_cp_interpolator(s)
+        except Exception as e:
+            if max_vmr < ignore_missing_cp_below_vmr:
+                log.debug(f"Skipping Cp for trace species '{s}' (max VMR {max_vmr:.3e}): {e}")
+                continue
+            raise RuntimeError(
+                f"Could not load JANAF Cp data for species '{s}' (needed for kappa table). File expected at "
+                f"$GGCHEM_PATH/data/JANAF/{s}.txt"
+            ) from e
+
+        kept_species.append(s)
+        kept_vmr_cols.append(j)
+        kept_cp.append(cp_interp)
+
+    if not kept_species:
+        raise RuntimeError("No species with Cp data available to compute kappa/delad")
+
+    vmr_kept = vmr[:, kept_vmr_cols]
+    vmr_kept_sum = vmr_kept.sum(axis=1)
+    if np.any(vmr_kept_sum <= 0):
+        raise RuntimeError("After filtering, VMR sums to <= 0 in at least one layer")
+    vmr_kept = vmr_kept / vmr_kept_sum[:, np.newaxis]
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    header_1 = (
+        "This file contains the adiabatic coefficient (kappa, delad), heat capacity and entropy per unit mass"
+    )
+    header_2 = (
+        "temp.[K]  press.[1e-6bar]  delad           c_p[erg mol^-1 K^-1]    log_S[log10(erg g^-1 K^-1)]"
+    )
+
+    p_out = p_bar * 1e6  # bar -> 1e-6 bar units (= dyn/cm^2)
+
+    with open(out_path, "w") as f:
+        f.write(header_1 + "\n")
+        f.write(header_2 + "\n")
+
+        # Stream by temperature slice to keep memory bounded.
+        for T in t_grid:
+            cp_species_j = np.array([cp(T) for cp in kept_cp], dtype=float)  # J mol^-1 K^-1
+            cp_mix_j = vmr_kept @ cp_species_j  # (nP,)
+            cp_mix_erg = cp_mix_j * _J_TO_ERG
+            if np.any(cp_mix_erg <= 0) or np.any(~np.isfinite(cp_mix_erg)):
+                raise RuntimeError("Non-physical mixture Cp encountered while building kappa table")
+
+            delad = R / cp_mix_erg
+
+            for P_val, delad_val, cp_val in zip(p_out, delad, cp_mix_erg):
+                f.write(
+                    f"{T:.6f}  {P_val:.6e}  {delad_val:.6e}  {cp_val:.6e}  0\n"
+                )
+
+    log.info(f"Wrote HELIOS kappa/delad table to '{out_path}'")
+    return out_path
 
 def p_sat(T, species, mask=False):
     """
@@ -54,6 +240,15 @@ def p_sat(T, species, mask=False):
         psat = 10.0**(3.7362 - 264.651/(T - 6.788))*bar
         if mask:
             mask = (T < 63.0) | (T > 126.0)
+            psat[mask] = np.nan
+        return psat
+
+    elif species == 'O2':
+        # NIST (54-154K)
+        psat = 10.0**(3.9523 - 340.024/(T - 4.144))*bar
+        # psat = 10.0**(3.85845 - 325.675/(T - 5.667))*bar # (54-100K)
+        if mask:
+            mask = (T < 54.0) | (T > 154.0)
             psat[mask] = np.nan
         return psat
 
@@ -201,6 +396,137 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["GGCHEM_PATH"],
     return missing_data
 
 
+def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path):
+    """
+    Creates a HELIOS mixfile with constant mixing ratios, limited by condensation.
+
+    Args:
+        p_bar (np.ndarray): Pressure grid in bar
+        T_k (np.ndarray): Temperature grid in K
+        mixing_ratios (dict): Species name -> constant mixing ratio 
+                              (e.g., {"H2O": 0.01, "CO2": 0.001, "N2": 0.989})
+        helios_mixfile_path (str): Output path
+    """
+    log.info(f"Creating constant-VMR mixfile at '{helios_mixfile_path}'")
+    
+    species_list = list(mixing_ratios.keys())
+    n_layers = len(p_bar)
+    n_species = len(species_list)
+    
+    # 1. Pre-calculate Saturation Limits (Vectorized)
+    # Shape: (n_layers, n_species)
+    max_vmr = np.full((n_layers, n_species), np.inf)
+    for i, s in enumerate(species_list):
+        psat = p_sat(T_k, s) # dyn/cm2
+        if not np.all(np.isnan(psat)):
+            # Convert dyn/cm2 to bar: 1 bar = 1e6 dyn/cm2
+            max_vmr[:, i] = (psat * 1e-6) / p_bar
+
+    # 2. Initial VMRs (normalized)
+    vmr = np.array([mixing_ratios[s] for s in species_list])
+    vmr = np.tile(vmr, (n_layers, 1))
+    vmr /= vmr.sum(axis=1, keepdims=True)
+
+    # 3. Iterative Adjustment
+    max_iter = 100
+    for _ in range(max_iter):
+        prev_vmr = vmr.copy()
+        
+        # Apply limits
+        #print(vmr[0,:])
+        #print(max_vmr[0,:])
+        limited = vmr >= max_vmr
+        vmr[limited] = max_vmr[limited]
+        
+        # Calculate deficit
+        current_sum = vmr.sum(axis=1, keepdims=True)
+        deficit = 1.0 - current_sum
+        
+        # If no deficit (or converged), break
+        if np.all(np.isclose(current_sum, 1.0, atol=1e-12)):
+            break
+            
+        # Identify species that can still accept gas
+        can_accept = np.logical_and(~limited, vmr >= 1e-29)
+        if not np.any(can_accept):
+            # Physical failure: everything is condensed
+            log.warning("All species saturated! Mean molecular weight may be inaccurate.")
+            break
+            
+        # Redistribute deficit proportionally to those NOT limited
+        # Mask weights for limited species
+        weights = prev_vmr * can_accept
+        weight_sum = weights.sum(axis=1, keepdims=True)
+        
+        # Avoid division by zero if all non-limited have 0 initial VMR
+        weight_sum[weight_sum == 0] = 1.0 
+        
+        vmr += (weights / weight_sum) * deficit
+
+        if np.allclose((vmr-prev_vmr), 0.0, atol=1e-12):
+            break
+
+    # 4. Mean Molecular Weight Calculation
+    # Using your renormalization approach:
+    actual_sum = vmr.sum(axis=1)
+    log.info(actual_sum.min())
+    mu_weights = np.array([species_lib[s].weight if s in species_lib else 2.0 for s in species_list])
+    mean_mu = np.sum(vmr * mu_weights, axis=1)
+
+
+    # WHAT IF VMR DOES NOT SUM TO 1 (all considered species condese)?
+    # EITHER assume missing "invisible" species has e.g. MMW = 2.0:
+    #mean_mu += (1-np.sum(vmr, axis=1)) * 2.0
+    # OR "renormalize" for MMW calculation:
+    mean_mu /= actual_sum #.flatten()?
+    
+    # Calculate total number density: n = P / (kB * T)
+    n_tot = (p_bar * 1e6) / (kB * T_k)  # p in dyn/cm²
+    
+    # Build output array: P, T, n_tot, mu, e-, species...
+    new_header = np.array(["P(bar)", "T(k)", "n_<tot>(cm-3)", "m(u)", "e-"] + species_list)
+    new_data = np.zeros((n_layers, len(new_header)))
+    new_data[:, 0] = p_bar
+    new_data[:, 1] = T_k
+    new_data[:, 2] = n_tot
+    new_data[:, 3] = mean_mu
+    new_data[:, 4] = 0.0  # electrons (negligible)
+    new_data[:, 5:] = vmr
+
+    # Generate pre-tabulated kappa/delad + c_p table for HELIOS convection.
+    # Written to a shared location and overwritten each iteration.
+    write_helios_delad_table(
+        p_bar=p_bar,
+        t_profile_k=T_k,
+        species=species_list,
+        vmr_profile=vmr,
+        out_path=DEFAULT_DELAD_TABLE_PATH,
+    )
+    
+    # Format header nicely (same as convert_ggchem_to_helios)
+    header_string = []
+    for i in range(len(new_header)):
+        header_string.append(new_header[i])
+        n_spaces = 16 - len(new_header[i])
+        header_string.append(n_spaces * " " + "\t")
+    header_string = "".join(header_string[:-1])
+    
+    # Save to file
+    try:
+        np.savetxt(
+            helios_mixfile_path,
+            new_data,
+            header=header_string,
+            fmt="%.10e",
+            comments="",
+            delimiter="\t",
+        )
+        log.info(f"Successfully created constant-VMR mixfile at {helios_mixfile_path}")
+    except IOError as e:
+        log.error(f"Failed to write mixfile: {e}")
+        raise
+
+
 def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in")):
     """
     Converts GGchem output (Static_Conc.dat) to a HELIOS mixfile.
@@ -315,6 +641,16 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.
 
     if n_layers > len(data):
         new_data = append_profiles(new_header, new_data, ref_pt=ref_pt)
+
+    # Generate pre-tabulated kappa/delad + c_p table for HELIOS convection.
+    # Written to a shared location and overwritten each iteration.
+    write_helios_delad_table(
+        p_bar=new_data[:, 0],
+        t_profile_k=new_data[:, 1],
+        species=[str(s) for s in new_header[5:]],
+        vmr_profile=new_data[:, 5:],
+        out_path=DEFAULT_DELAD_TABLE_PATH,
+    )
 
     # nicely format header
     header_string = []

@@ -4,17 +4,11 @@ H2O           yes             yes                file
 
 CO2           yes             yes                file
 
-CO            yes             yes                file
-
 CH4           yes             no                 file
 
-NH3           yes             no                 file
-
-HCN           yes             no                 file
-
-C2H2          yes             no                 file
-
 H2            no	          yes                file
+
+N2            no	          yes                file
 
 CIA_H2H2      yes             no                 file
 
