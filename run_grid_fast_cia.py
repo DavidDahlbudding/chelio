@@ -31,10 +31,10 @@ DEFAULT_CIA_SOURCES = {
     "CO2-CO2": "CO2-CO2_2024",
     "CO2-H2": "CO2-H2_2024",
     "H2-CH4": "H2-CH4_eq_2011",
-    "N2-CH4": "N2-CH4_2024",
+    "N2-CH4": "N2-CH4_2024_Tconst=50K",
     "N2-H2": "N2-H2_2024",
     "N2-H2O": "N2-H2O_2018",
-    "N2-N2": "N2-N2_2021",
+    "N2-N2": "N2-N2_2021_Tconst=50K",
     "H2-H2": "H2-H2_2018+02",
 }
 
@@ -290,8 +290,8 @@ if __name__ == "__main__":
         exit(0)
 
     # --- Define Parameter Grid ---
-    temps = [200] # K
-    psurfs = ['critical']  # dyn/cm^2
+    temps = [100, 200, 300] # K
+    psurfs = [1e8]  # dyn/cm^2
 
     base_out_dir = "output/CIA_comparison_HELIOS"
 
