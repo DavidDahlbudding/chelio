@@ -82,7 +82,7 @@ def _get_janaf_cp_interpolator(species: str):
 
     janaf_file = os.path.join(ggchem_path, "data", "JANAF", f"{species}.txt")
     cp_data = np.loadtxt(janaf_file, skiprows=3)[:, :2]
-    interp = interp1d(cp_data[:, 0], cp_data[:, 1], bounds_error=False, fill_value="extrapolate")
+    interp = interp1d(cp_data[:, 0], cp_data[:, 1], bounds_error=False, fill_value=(cp_data[0, 1], cp_data[-1, 1]))
     _CP_INTERP_CACHE[species] = interp
     return interp
 
@@ -93,7 +93,7 @@ def write_helios_delad_table(
     species: Sequence[str],
     vmr_profile: np.ndarray,
     out_path: str = DEFAULT_DELAD_TABLE_PATH,
-    t_step_max_k: float = 25.0,
+    t_step_max_k: float = 20.0,
     ignore_missing_cp_below_vmr: float = 1e-20,
 ) -> str:
     """Write a HELIOS standard-format pre-tabulated kappa/delad (+ c_p) file.
@@ -125,8 +125,8 @@ def write_helios_delad_table(
         raise ValueError("vmr_profile must have shape (nP, nSpecies)")
 
     # Build linear T grid with constant steps, step size <= t_step_max_k.
-    t_min = float(np.nanmin(t_profile_k))
-    t_max = float(np.nanmax(t_profile_k))
+    t_min = float(np.nanmin(t_profile_k)) * 0.9
+    t_max = float(np.nanmax(t_profile_k)) * 1.1
     if not np.isfinite(t_min) or not np.isfinite(t_max):
         raise ValueError("Temperature profile contains non-finite values")
     if t_max < t_min:

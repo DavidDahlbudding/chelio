@@ -113,7 +113,7 @@ convective damping parameter =                   4.0                        [aut
 plancktable dimension and stepsize =             8000          2            [two numbers > 0]                                              (CL: N)
 maximum number of iterations =                   30000                      [number > 0]                                                   (CL: Y)
 radiative equilibrium criterion =                1e-8                       [number > 0]                                                   (CL: Y)
-relax radiative criterion at =                   1e4   2e4                  [two numbers > 0]                                              (CL: N)
+relax radiative criterion at =                   9e3   1.2e4                [two numbers > 0]                                              (CL: N)
 number of prerun timesteps =                     0                          [number >= 0]                                                  (CL: Y)
 physical timestep [s] =                          no                         [no, number > 0]                                               (CL: Y)
   number --> runtime limit [s] =                 86400                      [number > timestep]                                            (CL: Y)

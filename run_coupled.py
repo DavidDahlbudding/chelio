@@ -343,6 +343,11 @@ def main():
         elif chemistry_mode == "constant":
             # Create mixfile with constant mixing ratios
             mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, helios_mixfile)
+        
+        # copy delad table to run_output_dir and append iteration number to the filename
+        delad_table_name = os.path.basename(mixfile_utils.DEFAULT_DELAD_TABLE_PATH)
+        delad_table_output = os.path.join(run_output_dir, f"{delad_table_name}_{i_min}")
+        shutil.copy(mixfile_utils.DEFAULT_DELAD_TABLE_PATH, delad_table_output)
 
         for i in range(i_min, i_max + 1):
             log.info(f"--- Coupling Iteration: {i} ---")
@@ -352,7 +357,15 @@ def main():
                 max_iter = config["coupling"]["helios_max_iter_initial"]
             elif i >= i_full:
                 max_iter = config["coupling"]["helios_max_iter_full"]
-                coupling_speed_up = "yes"
+                # read _ABORT.dat file to check if we can speed up convergence
+                abort_file = os.path.join(run_output_dir, f"{args.name}_ABORT.dat")
+                if os.path.exists(abort_file):
+                    with open(abort_file, "r") as f:
+                        line = f.readline().split(' ')
+                        line = line[3][:-1] # exclude ")" to get iteration number
+                        if line.isdigit() and int(line) != i-1:
+                            # only "speed up" (avg. with previous iteration) if it converged
+                            coupling_speed_up = "yes"
             else:
                 max_iter = config["coupling"]["helios_max_iter_intermediate"]
 
@@ -398,6 +411,11 @@ def main():
             # Prepare for next iteration
             new_tp_profile = os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i}.dat")
             helios_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i+1}.dat")
+
+            tp_data = np.loadtxt(new_tp_profile, skiprows=1)
+            if np.all(tp_data[:, 1] < 1.1):
+                log.warning(f"Temperature profile stuck at 1.001 K. Aborting coupling loop...")
+                break
             
             if chemistry_mode == "ggchem":
                 # Copy new T-P profile to GGchem input and run GGchem
@@ -415,7 +433,6 @@ def main():
             
             elif chemistry_mode == "constant":
                 # Read the new T-P profile and create updated mixfile with condensation
-                tp_data = np.loadtxt(new_tp_profile, skiprows=1)
                 P_bar_new = tp_data[:, 0]
                 T_k_new = tp_data[:, 1]
                 mixfile_utils.create_constant_mixfile(P_bar_new, T_k_new, constant_mixing_ratios, helios_mixfile)
