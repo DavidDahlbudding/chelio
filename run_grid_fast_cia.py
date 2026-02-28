@@ -275,6 +275,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # Restore defaults before starting (in case of previous runs that didn't restore)
+    print("Restoring default CIA sources before starting...")
+    for pair in DEFAULT_CIA_SOURCES.keys():
+        restore_default_cia(pair)
+
     # Discover available CIA sources
     sources_by_pair = discover_cia_sources()
     
@@ -290,7 +295,7 @@ if __name__ == "__main__":
         exit(0)
 
     # --- Define Parameter Grid ---
-    temps = [100, 200, 300] # K
+    temps = [100, 150, 200, 250, 300, 350] # K
     psurfs = [1e8]  # dyn/cm^2
 
     base_out_dir = "output/CIA_comparison_HELIOS"
