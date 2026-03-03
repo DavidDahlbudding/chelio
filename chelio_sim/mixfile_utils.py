@@ -50,6 +50,11 @@ DEFAULT_DELAD_TABLE_PATH = os.path.abspath(
 
 _CP_INTERP_CACHE = {}
 
+# Species for which p_sat() returns a valid physical formula.
+# He returns NaN (fine); unknown species return np.empty_like (uninitialized garbage - latent bug).
+# Using an allowlist avoids calling p_sat for non-condensing or unknown species.
+_PSAT_FORMULA_SPECIES = frozenset(['H2', 'N2', 'CH4', 'O2', 'CO2', 'H2O', 'NH3', 'CO'])
+
 
 def _validate_log10_pressure_grid(p_bar: np.ndarray, rtol: float = 1e-2, atol: float = 1e-1) -> None:
     """Validate that log10(P) spacing is constant (HELIOS requirement for delad tables)."""
@@ -176,6 +181,65 @@ def write_helios_delad_table(
         raise RuntimeError("After filtering, VMR sums to <= 0 in at least one layer")
     vmr_kept = vmr_kept / vmr_kept_sum[:, np.newaxis]
 
+    # --- Compute vmr_grid: shape (nP, nT, nS) ---
+    # Apply condensation limits at each (P, T) grid point using p_sat(),
+    # starting from the 1-D profile VMRs as the base mixing ratios.
+    nP_g = len(p_bar)
+    nT_g = len(t_grid)
+    nS_g = len(kept_species)
+    p_bar_dyn = p_bar * 1e6  # bar -> dyn/cm^2 (same units as p_sat return value)
+
+    # A. Saturation VMR ceiling: max_vmr_grid[iP, iT, s] = p_sat(T[iT], s) / P[iP]
+    #    inf => no condensation limit (non-condensing or unknown species).
+    max_vmr_grid = np.full((nP_g, nT_g, nS_g), np.inf)
+    for s_idx, s in enumerate(kept_species):
+        if s not in _PSAT_FORMULA_SPECIES:
+            continue  # He, CIA-like, or unknown: no condensation limit
+        psat_t = p_sat(t_grid, s)  # (nT,) dyn/cm^2; formula extrapolates all T
+        psat_t = np.where(np.isnan(psat_t), np.inf, psat_t)
+        # broadcast (nT,) / (nP,) -> (nP, nT)
+        max_vmr_grid[:, :, s_idx] = psat_t[np.newaxis, :] / p_bar_dyn[:, np.newaxis]
+
+    # B. Initialise from 1-D profile VMRs, broadcast over T dimension
+    vmr_grid = np.broadcast_to(
+        vmr_kept[:, np.newaxis, :], (nP_g, nT_g, nS_g)
+    ).copy()
+
+    # C. Iterative condensation redistribution (vectorised over nP x nT)
+    #    Same algorithm as create_constant_mixfile, with species on axis=2.
+    for _cond_iter in range(100):
+        prev_vmr = vmr_grid.copy()
+        limited = vmr_grid >= max_vmr_grid
+        vmr_grid = np.where(limited, max_vmr_grid, vmr_grid)
+
+        current_sum = vmr_grid.sum(axis=2, keepdims=True)  # (nP, nT, 1)
+        deficit = 1.0 - current_sum
+        if np.all(np.abs(deficit) < 1e-12):
+            break
+
+        can_accept = (~limited) & (vmr_grid >= 1e-29)
+        if not np.any(can_accept):
+            log.warning(
+                "write_helios_delad_table: all kept species hit condensation ceiling "
+                "at some (P, T) grid point(s). delad may be inaccurate there."
+            )
+            break
+
+        weights = prev_vmr * can_accept
+        weight_sum = weights.sum(axis=2, keepdims=True)
+        weight_sum = np.where(weight_sum == 0.0, 1.0, weight_sum)
+        vmr_grid += (weights / weight_sum) * deficit
+        vmr_grid = np.minimum(vmr_grid, max_vmr_grid)  # re-clamp after redistribution
+
+        if np.allclose(vmr_grid - prev_vmr, 0.0, atol=1e-12):
+            break
+
+    # D. Normalise per (P, T) point so delad remains physical when condensation
+    #    depletes part of the gas (avoid unphysically small delad from partial sums).
+    vmr_grid_sum = vmr_grid.sum(axis=2, keepdims=True)
+    vmr_grid_sum = np.where(vmr_grid_sum <= 0.0, 1.0, vmr_grid_sum)
+    vmr_grid = vmr_grid / vmr_grid_sum
+
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     header_1 = (
@@ -192,9 +256,9 @@ def write_helios_delad_table(
         f.write(header_2 + "\n")
 
         # Stream by temperature slice to keep memory bounded.
-        for T in t_grid:
+        for iT, T in enumerate(t_grid):
             cp_species_j = np.array([cp(T) for cp in kept_cp], dtype=float)  # J mol^-1 K^-1
-            cp_mix_j = vmr_kept @ cp_species_j  # (nP,)
+            cp_mix_j = vmr_grid[:, iT, :] @ cp_species_j  # (nP,)
             cp_mix_erg = cp_mix_j * _J_TO_ERG
             if np.any(cp_mix_erg <= 0) or np.any(~np.isfinite(cp_mix_erg)):
                 raise RuntimeError("Non-physical mixture Cp encountered while building kappa table")
@@ -396,16 +460,18 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["GGCHEM_PATH"],
     return missing_data
 
 
-def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path):
+def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, relative_humidity=1.0):
     """
     Creates a HELIOS mixfile with constant mixing ratios, limited by condensation.
 
     Args:
         p_bar (np.ndarray): Pressure grid in bar
         T_k (np.ndarray): Temperature grid in K
-        mixing_ratios (dict): Species name -> constant mixing ratio 
+        mixing_ratios (dict): Species name -> constant mixing ratio
                               (e.g., {"H2O": 0.01, "CO2": 0.001, "N2": 0.989})
         helios_mixfile_path (str): Output path
+        relative_humidity (float): Fractional relative humidity applied to H2O saturation cap
+                                   (e.g., 0.8 means H2O VMR <= 0.8 * p_sat(T)/P). Default: 1.0.
     """
     log.info(f"Creating constant-VMR mixfile at '{helios_mixfile_path}'")
     
@@ -420,7 +486,8 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path):
         psat = p_sat(T_k, s) # dyn/cm2
         if not np.all(np.isnan(psat)):
             # Convert dyn/cm2 to bar: 1 bar = 1e6 dyn/cm2
-            max_vmr[:, i] = (psat * 1e-6) / p_bar
+            rh_factor = relative_humidity if s == "H2O" else 1.0
+            max_vmr[:, i] = rh_factor * (psat * 1e-6) / p_bar
 
     # 2. Initial VMRs (normalized)
     vmr = np.array([mixing_ratios[s] for s in species_list])

@@ -93,6 +93,12 @@ def main():
         default=None,
         help="Constant mixing ratios as comma-separated key=value pairs (e.g., 'N2=0.5,CH4=0.5,CO2=0.0,H2=0.0,H2O=0.0'). Overrides config."
     )
+    parser.add_argument(
+        "--relative_humidity",
+        type=float,
+        default=1.0,
+        help="Fractional relative humidity cap for H2O in constant chemistry mode (e.g., 0.8 means VMR_H2O <= 0.8 * p_sat(T)/P). Default: 1.0."
+    )
 
     # Add overrides for key simulation parameters
     sim_params = [
@@ -148,6 +154,8 @@ def main():
             key, value = pair.strip().split("=")
             mixing_ratios[key.strip()] = float(value.strip())
         config["simulation_params"]["constant_mixing_ratios"] = mixing_ratios
+
+    relative_humidity = args.relative_humidity
 
     # 3. SETUP PATHS AND DIRECTORIES
     chelio_path = config["paths"].get("chelio_path") or Path(__file__).parent.resolve()
@@ -322,7 +330,7 @@ def main():
             
             # Create initial mixfile with constant mixing ratios
             initial_mixfile = os.path.join(run_output_dir, "vertical_mix_initial.dat")
-            mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile)
+            mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile, relative_humidity=relative_humidity)
         
         # --- Coupling Loop ---
         i_min = config["coupling"]["i_min"]
@@ -342,11 +350,11 @@ def main():
             mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
         elif chemistry_mode == "constant":
             # Create mixfile with constant mixing ratios
-            mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, helios_mixfile)
+            mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, helios_mixfile, relative_humidity=relative_humidity)
         
         # copy delad table to run_output_dir and append iteration number to the filename
         delad_table_name = os.path.basename(mixfile_utils.DEFAULT_DELAD_TABLE_PATH)
-        delad_table_output = os.path.join(run_output_dir, f"{delad_table_name}_{i_min}")
+        delad_table_output = os.path.join(run_output_dir, f"{delad_table_name[:-4]}_{i_min}.dat")
         shutil.copy(mixfile_utils.DEFAULT_DELAD_TABLE_PATH, delad_table_output)
 
         for i in range(i_min, i_max + 1):
@@ -435,7 +443,11 @@ def main():
                 # Read the new T-P profile and create updated mixfile with condensation
                 P_bar_new = tp_data[:, 0]
                 T_k_new = tp_data[:, 1]
-                mixfile_utils.create_constant_mixfile(P_bar_new, T_k_new, constant_mixing_ratios, helios_mixfile)
+                mixfile_utils.create_constant_mixfile(P_bar_new, T_k_new, constant_mixing_ratios, helios_mixfile, relative_humidity=relative_humidity)
+
+            # copy delad table to run_output_dir and append iteration number to the filename
+            delad_table_output = os.path.join(run_output_dir, f"{delad_table_name[:-4]}_{i+1}.dat")
+            shutil.copy(mixfile_utils.DEFAULT_DELAD_TABLE_PATH, delad_table_output)
 
         log.info(f"--- Finalizing Simulation ---")
         # Final conversion/creation of mixfile
@@ -455,7 +467,7 @@ def main():
             tp_data = np.loadtxt(final_tp, skiprows=1)
             P_bar_final = tp_data[:, 0]
             T_k_final = tp_data[:, 1]
-            mixfile_utils.create_constant_mixfile(P_bar_final, T_k_final, constant_mixing_ratios, final_mixfile)
+            mixfile_utils.create_constant_mixfile(P_bar_final, T_k_final, constant_mixing_ratios, final_mixfile, relative_humidity=relative_humidity)
 
         log.info(f"Simulation '{args.name}' completed.")
 

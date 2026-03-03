@@ -8,8 +8,6 @@ CH4           yes             no                 file
 
 H2            no	          yes                file
 
-N2            no	          yes                file
-
 CIA_H2H2      yes             no                 file
 
 CIA_CH4CH4      yes             no                 file
@@ -21,11 +19,3 @@ CIA_CO2CO2      yes             no                 file
 CIA_CO2H2      yes             no                 file
 
 CIA_H2CH4      yes             no                 file
-
-CIA_N2CH4      yes             no                 file
-
-CIA_N2H2      yes             no                 file
-
-CIA_N2H2O      yes             no                 file
-
-CIA_N2N2      yes             no                 file
