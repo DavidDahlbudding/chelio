@@ -273,12 +273,21 @@ if __name__ == "__main__":
         action="store_true",
         help="List all available CIA sources and exit."
     )
+    parser.add_argument(
+        "--restore-defaults",
+        action="store_true",
+        help="Restore default CIA sources before starting (useful if previous runs didn't restore)."
+    )
     args = parser.parse_args()
 
     # Restore defaults before starting (in case of previous runs that didn't restore)
     print("Restoring default CIA sources before starting...")
     for pair in DEFAULT_CIA_SOURCES.keys():
         restore_default_cia(pair)
+    
+    if args.restore_defaults:
+        print("Default CIA sources have been restored. Exiting as per --restore-defaults flag.")
+        exit(0)
 
     # Discover available CIA sources
     sources_by_pair = discover_cia_sources()
