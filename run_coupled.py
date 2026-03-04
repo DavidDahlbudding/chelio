@@ -253,6 +253,8 @@ def main():
         log.info(f"Chemistry mode: {chemistry_mode}")
 
         # --- Initial Setup ---
+        i_min = config["coupling"]["i_min"]
+
         if chemistry_mode == "ggchem":
             log.info("Initializing GGchem with initial abundances and P-T profile...")
             if sim_p["outgas_or_manual"] == "outgas":
@@ -292,7 +294,19 @@ def main():
                 )
                 boa_p = float(sim_p["surface_pressure"])
 
-            P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
+            if i_min == 0:
+                P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
+            else:
+                try:
+                    # copy f"{args.name}_tp_coupling_{i_min-1}.dat" to ggchem_inputs/pt_helios.in for the initial run
+                    shutil.copy(os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i_min-1}.dat"), os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'))
+
+                    tp_data = np.loadtxt(os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i_min-1}.dat"), skiprows=1)
+                    P_bar = tp_data[:, 0]
+                    T_k = tp_data[:, 1]
+                except FileNotFoundError:
+                    log.error(f"Initial T-P profile file not found: {os.path.join(run_output_dir, f'{args.name}_tp_coupling_{i_min-1}.dat')}")
+                    sys.exit(1)
 
             # Prepare GGchem's working directory
             shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'abundances.in'), os.path.join(ggchem_path, 'abund_helios.in'))
@@ -302,7 +316,8 @@ def main():
             
             # Archive initial inputs
             shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'abundances.in'), run_output_dir)
-            shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'), os.path.join(run_output_dir, f"{args.name}_tp_coupling_-1.dat"))
+            if i_min == 0:
+                shutil.copy(os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'), os.path.join(run_output_dir, f"{args.name}_tp_coupling_-1.dat"))
 
             log.info("Running initial GGchem calculation...")
             external_runners.run_ggchem(ggchem_path)
@@ -322,18 +337,30 @@ def main():
             boa_p = float(sim_p["surface_pressure"])
             
             # Create initial P-T profile
-            P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
-            
-            # Save initial P-T profile
-            initial_tp_path = os.path.join(run_output_dir, f"{args.name}_tp_coupling_-1.dat")
-            np.savetxt(initial_tp_path, np.vstack([P_bar, T_k]).T, fmt="%.6e", header="# P [bar], T [K]", comments="")
-            
-            # Create initial mixfile with constant mixing ratios
-            initial_mixfile = os.path.join(run_output_dir, "vertical_mix_initial.dat")
-            mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile, relative_humidity=relative_humidity)
+            if i_min == 0:
+                P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
+
+                # Save initial P-T profile
+                initial_tp_path = os.path.join(run_output_dir, f"{args.name}_tp_coupling_-1.dat")
+                np.savetxt(initial_tp_path, np.vstack([P_bar, T_k]).T, fmt="%.6e", header="# P [bar], T [K]", comments="")
+
+                # Create initial mixfile with constant mixing ratios
+                initial_mixfile = os.path.join(run_output_dir, "vertical_mix_initial.dat")
+                mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile, relative_humidity=relative_humidity)
+            else:
+                try:
+                    # copy f"{args.name}_tp_coupling_{i_min-1}.dat" to ggchem_inputs/pt_helios.in for the initial run
+                    shutil.copy(os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i_min-1}.dat"), os.path.join(chelio_path, 'ggchem_inputs', 'pt_helios.in'))
+
+                    tp_data = np.loadtxt(os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i_min-1}.dat"), skiprows=1)
+                    P_bar = tp_data[:, 0]
+                    T_k = tp_data[:, 1]
+                    
+                except FileNotFoundError:
+                    log.error(f"Initial T-P profile file not found: {os.path.join(run_output_dir, f'{args.name}_tp_coupling_{i_min-1}.dat')}")
+                    sys.exit(1)
         
         # --- Coupling Loop ---
-        i_min = config["coupling"]["i_min"]
         i_max = config["coupling"]["i_max"]
         i_full = config["coupling"]["i_full_convergence"]
         

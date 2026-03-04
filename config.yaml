@@ -48,8 +48,8 @@ planet_params:
 
 coupling:
   with_ggchem: True
-  i_min: 0 # Starting coupling iteration
-  i_max: 10 # Maximum coupling iterations
+  i_min: 11 # Starting coupling iteration
+  i_max: 30 # Maximum coupling iterations
   i_full_convergence: 4 # Iteration to switch to full convergence
   rad_eq_criterion: 1.0e-8
   helios_max_iter_initial: 1000
