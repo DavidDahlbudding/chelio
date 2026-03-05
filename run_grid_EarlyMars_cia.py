@@ -93,7 +93,8 @@ def build_mixing_ratios(trace_gas, trace_pct):
     """
     trace_vmr = trace_pct / 100.0
     non_trace = "CH4" if trace_gas == "H2" else "H2"
-    return f"CO2=1.0,H2O=1.0,{trace_gas}={trace_vmr},{non_trace}=1e-30"
+    co2_vmr = 1.0 - trace_vmr  # CO2 takes the remainder of the volume
+    return f"CO2={co2_vmr},H2O=1.0,{trace_gas}={trace_vmr},{non_trace}=1e-30"
 
 
 def run_single_simulation(params):
