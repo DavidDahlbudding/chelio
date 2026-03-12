@@ -178,6 +178,19 @@ def main():
     run_output_dir_outgassed = os.path.join(chelio_path, args.out_dir, f"{args.name}_outgassed")
     os.makedirs(run_output_dir, exist_ok=True)
 
+    # Extract iteration parameters
+    i_min = config["coupling"]["i_min"]
+    i_max = config["coupling"]["i_max"]
+    i_full = config["coupling"]["i_full_convergence"]
+
+    # Check if run already exists if {name}_coupling_convergence.dat exists and contains "1" or if {name}_tp_coupling_{i_max}.dat exists
+    convergence_file = os.path.join(run_output_dir, f"{args.name}_coupling_convergence.dat")
+    final_tp_file = os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i_max}.dat")
+    if (os.path.exists(convergence_file) and open(convergence_file).read().strip() == "1") or os.path.exists(final_tp_file):
+        print(f"Error: A completed run with name '{args.name}' already exists in {run_output_dir}.")
+        print("       Please choose a different name or remove the existing run.")
+        sys.exit(1)
+
     # 4. SETUP LOGGING
     log = setup_logging(run_output_dir, config["logging"])
     log.info(f"--- Starting Chelio Simulation: {args.name} ---")
@@ -185,7 +198,7 @@ def main():
 
     shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'param.dat'), os.path.join(helios_path, 'param.dat'))
 
-    # 5. EXECUTE SIMULATION LOGIC (Mirrors the bash script)
+    # 5. EXECUTE SIMULATION LOGIC
     try:
         sim_p = config["simulation_params"]
         min_boa_pressure = sim_p["min_boa_pressure"]
@@ -253,8 +266,6 @@ def main():
         log.info(f"Chemistry mode: {chemistry_mode}")
 
         # --- Initial Setup ---
-        i_min = config["coupling"]["i_min"]
-
         if chemistry_mode == "ggchem":
             log.info("Initializing GGchem with initial abundances and P-T profile...")
             if sim_p["outgas_or_manual"] == "outgas":
@@ -361,8 +372,6 @@ def main():
                     sys.exit(1)
         
         # --- Coupling Loop ---
-        i_max = config["coupling"]["i_max"]
-        i_full = config["coupling"]["i_full_convergence"]
         
         started_convection = 0
         coupling_speed_up = "no"

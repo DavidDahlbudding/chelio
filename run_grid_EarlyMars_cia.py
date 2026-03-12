@@ -38,8 +38,8 @@ DEFAULT_CIA_SOURCES = {
 
 # CIA sources to test per trace gas species
 CIA_SOURCES_BY_GAS = {
-    "H2":  ["CO2-H2_2018.h5",  "CO2-H2_2024.h5"],
-    "CH4": ["CO2-CH4_2017.h5", "CO2-CH4_2020.h5"],
+    "H2":  ["CO2-H2_2018_Tex=150K.h5",  "CO2-H2_2024.h5"],
+    "CH4": ["CO2-CH4_2017_Tex=150K.h5", "CO2-CH4_2020.h5"],
 }
 
 # CIA pair associated with each trace gas
