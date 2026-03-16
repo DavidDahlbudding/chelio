@@ -52,9 +52,9 @@ coupling:
   i_max: 10 # Maximum coupling iterations
   i_full_convergence: 4 # Iteration to switch to full convergence
   rad_eq_criterion: 1.0e-8
-  helios_max_iter_initial: 1000
-  helios_max_iter_intermediate: 3000
-  helios_max_iter_full: 5000
+  helios_max_iter_initial: 15000
+  helios_max_iter_intermediate: 15000
+  helios_max_iter_full: 15000
 
 logging:
   level: "INFO" # DEBUG, INFO, WARNING, ERROR, CRITICAL

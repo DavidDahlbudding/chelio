@@ -406,10 +406,13 @@ def main():
                 if os.path.exists(abort_file):
                     with open(abort_file, "r") as f:
                         line = f.readline().split(' ')
-                        line = line[3][:-1] # exclude ")" to get iteration number
+                        line = line[3][:-1] # get "{i})" and exclude ")" to get iteration number
                         if line.isdigit() and int(line) != i-1:
                             # only "speed up" (avg. with previous iteration) if it converged
                             coupling_speed_up = "yes"
+                        else:
+                            # otherwise, disable
+                            coupling_speed_up = "no"
             else:
                 max_iter = config["coupling"]["helios_max_iter_intermediate"]
 
