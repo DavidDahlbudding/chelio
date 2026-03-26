@@ -269,6 +269,12 @@ if __name__ == "__main__":
         help="Specific CIA pairs to test (e.g., N2-CH4 CO2-CO2). Default: all pairs."
     )
     parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Specific CIA source filename to test (e.g., N2-CH4_2024.h5). Overrides --pairs if specified."
+    )
+    parser.add_argument(
         "--list-sources",
         action="store_true",
         help="List all available CIA sources and exit."
@@ -310,8 +316,20 @@ if __name__ == "__main__":
     base_out_dir = "output/CIA_comparison_HELIOS"
 
     # Filter pairs if specified
-    pairs_to_test = args.pairs if args.pairs else list(sources_by_pair.keys())
-    
+    if args.source:
+        # If a specific source is given, find its pair and only test that pair
+        source_filename = args.source
+        pair = get_cia_pair_from_filename(source_filename)
+        if pair not in sources_by_pair or source_filename not in sources_by_pair[pair]:
+            print(f"Error: Specified source '{source_filename}' not found in hitran_cia directory.")
+            exit(1)
+        pairs_to_test = [pair]
+        sources_by_pair[pair] = [source_filename]  # Only test the specified source for that pair
+    elif args.pairs:
+        pairs_to_test = args.pairs
+    else:
+        pairs_to_test = list(sources_by_pair.keys())
+
     # Validate requested pairs
     for pair in pairs_to_test:
         if pair not in sources_by_pair:
