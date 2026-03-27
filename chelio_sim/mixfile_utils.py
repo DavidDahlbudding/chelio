@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import sys
 import time
 from math import ceil
@@ -15,6 +16,15 @@ log = logging.getLogger(__name__)
 try:
     sys.path.append(os.path.join(os.environ["HELIOS_PATH"], "source"))
     from species_database import species_lib
+except (ImportError, KeyError):
+    log.error(
+        "Could not import species_database. Please set the HELIOS_PATH environment variable."
+    )
+    raise
+
+try:
+    sys.path.append(os.path.join(os.environ["CHELIO_PATH"], "chelio_sim"))
+    from rt_utils import parse_mixfile
 except (ImportError, KeyError):
     log.error(
         "Could not import species_database. Please set the HELIOS_PATH environment variable."
@@ -460,7 +470,7 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["GGCHEM_PATH"],
     return missing_data
 
 
-def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, relative_humidity=1.0):
+def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, relative_humidity=1.0, coupling_speed_up=False):
     """
     Creates a HELIOS mixfile with constant mixing ratios, limited by condensation.
 
@@ -560,6 +570,32 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, rela
     new_data[:, 4] = 0.0  # electrons (negligible)
     new_data[:, 5:] = vmr
 
+    if coupling_speed_up:
+        # replace number i in helios_mixfile_path (between last "_" and ".dat") with "i-1"
+        base, ext = os.path.splitext(helios_mixfile_path)
+        if "_" in base:
+            prefix, num_str = base.rsplit("_", 1)
+            if num_str.isdigit():
+                prev_num_str = str(int(num_str) - 1)
+                prev_helios_mixfile_path = f"{prefix}_{prev_num_str}{ext}"
+                if os.path.exists(prev_helios_mixfile_path):
+                    p_prev, mu_prev, species_prev, vmr_prev = parse_mixfile(prev_helios_mixfile_path)
+                    # Check if species_prev matches species_list
+                    if set(species_prev) == set(species_list):
+                        # average mu and (log) vmr with previous mixfile
+                        new_data[:, 3] = (new_data[:, 3] + mu_prev) / 2.0
+                        for s in species_list:
+                            idx_new = species_list.index(s)
+                            zero_mask = vmr_prev[s] != 0
+                            new_data[~zero_mask, 5 + idx_new] = 10**(np.log10(new_data[~zero_mask, 5 + idx_new]) + np.log10(vmr_prev[s][~zero_mask]) / 2.0)
+                            new_data[zero_mask, 5 + idx_new] = new_data[zero_mask, 5 + idx_new]
+                else:
+                    log.warning(f"Previous mixfile '{prev_helios_mixfile_path}' not found for speed-up. Generating new mixfile.")
+            else:
+                log.warning(f"Filename '{helios_mixfile_path}' does not end with a number for speed-up. Generating new mixfile.")
+        else:
+            log.warning(f"Filename '{helios_mixfile_path}' does not contain '_' for speed-up. Generating new mixfile.")
+
     # Generate pre-tabulated kappa/delad + c_p table for HELIOS convection.
     # Written to a shared location and overwritten each iteration.
     write_helios_delad_table(
@@ -594,13 +630,14 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, rela
         raise
 
 
-def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in")):
+def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in"), coupling_speed_up=False):
     """
     Converts GGchem output (Static_Conc.dat) to a HELIOS mixfile.
 
     Args:
         ggchem_output_path (str): Path to the GGchem output file (e.g., Static_Conc.dat).
         helios_mixfile_path (str): Path to write the output HELIOS mixfile to.
+        coupling_speed_up (bool): Whether to use speed-up coupling with previous mixfile.
     """
     log.info(
         f"Converting GGchem output '{ggchem_output_path}' to HELIOS mixfile '{helios_mixfile_path}'"
@@ -708,6 +745,32 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.
 
     if n_layers > len(data):
         new_data = append_profiles(new_header, new_data, ref_pt=ref_pt)
+
+    if coupling_speed_up:
+        # replace number i in helios_mixfile_path (between last "_" and ".dat") with "i-1"
+        base, ext = os.path.splitext(helios_mixfile_path)
+        if "_" in base:
+            prefix, num_str = base.rsplit("_", 1)
+            if num_str.isdigit():
+                prev_num_str = str(int(num_str) - 1)
+                prev_helios_mixfile_path = f"{prefix}_{prev_num_str}{ext}"
+                if os.path.exists(prev_helios_mixfile_path):
+                    p_prev, mu_prev, species_prev, vmr_prev = parse_mixfile(prev_helios_mixfile_path)
+                    # Check if species_prev matches species_list
+                    if set(species_prev) == set(species):
+                        # average mu and (log) vmr with previous mixfile
+                        new_data[:, 3] = (new_data[:, 3] + mu_prev) / 2.0
+                        for s in species:
+                            idx_new = species.index(s)
+                            zero_mask = vmr_prev[s] != 0
+                            new_data[~zero_mask, 5 + idx_new] = 10**(np.log10(new_data[~zero_mask, 5 + idx_new]) + np.log10(vmr_prev[s][~zero_mask]) / 2.0)
+                            new_data[zero_mask, 5 + idx_new] = new_data[zero_mask, 5 + idx_new]
+                else:
+                    log.warning(f"Previous mixfile '{prev_helios_mixfile_path}' not found for speed-up. Generating new mixfile.")
+            else:
+                log.warning(f"Filename '{helios_mixfile_path}' does not end with a number for speed-up. Generating new mixfile.")
+        else:
+            log.warning(f"Filename '{helios_mixfile_path}' does not contain '_' for speed-up. Generating new mixfile.")
 
     # Generate pre-tabulated kappa/delad + c_p table for HELIOS convection.
     # Written to a shared location and overwritten each iteration.
