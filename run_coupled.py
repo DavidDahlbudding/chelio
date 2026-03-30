@@ -406,7 +406,7 @@ def main():
                 max_iter = config["coupling"]["helios_max_iter_full"]
                 # read _ABORT.dat file to check if we can speed up convergence
                 abort_file = os.path.join(run_output_dir, f"{args.name}_ABORT.dat")
-                if os.path.exists(abort_file):
+                if False: #os.path.exists(abort_file):
                     with open(abort_file, "r") as f:
                         line = f.readline().split(' ')
                         line = line[3][:-1] # get "{i})" and exclude ")" to get iteration number
@@ -416,6 +416,8 @@ def main():
                         else:
                             # otherwise, disable
                             coupling_speed_up = "no"
+                else:
+                    coupling_speed_up = "yes"
             else:
                 max_iter = config["coupling"]["helios_max_iter_intermediate"]
 
