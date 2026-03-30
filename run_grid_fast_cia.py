@@ -310,7 +310,7 @@ if __name__ == "__main__":
         exit(0)
 
     # --- Define Parameter Grid ---
-    temps = [100, 150, 200, 250, 300, 350] # K
+    temps = [150] # K
     psurfs = [1e8]  # dyn/cm^2
 
     base_out_dir = "output/CIA_comparison_HELIOS"
