@@ -359,7 +359,7 @@ def main():
 
                 # Create initial mixfile with constant mixing ratios
                 initial_mixfile = os.path.join(run_output_dir, "vertical_mix_initial.dat")
-                mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile, relative_humidity=relative_humidity)
+                t_min_max = mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile, t_min_max, relative_humidity=relative_humidity)
             else:
                 try:
                     # copy f"{args.name}_tp_coupling_{i_min-1}.dat" to ggchem_inputs/pt_helios.in for the initial run
