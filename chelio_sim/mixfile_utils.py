@@ -104,18 +104,18 @@ def _get_janaf_cp_interpolator(species: str):
 
 def write_helios_delad_table(
     p_bar: np.ndarray,
-    t_profile_k: np.ndarray,
+    t_min_max: tuple[float, float],
     species: Sequence[str],
     vmr_profile: np.ndarray,
     out_path: str = DEFAULT_DELAD_TABLE_PATH,
-    t_step_max_k: float = 20.0,
+    t_step_max_k: float = 10.0,
     ignore_missing_cp_below_vmr: float = 1e-20,
 ) -> str:
     """Write a HELIOS standard-format pre-tabulated kappa/delad (+ c_p) file.
 
     Inputs:
     - p_bar: 1D pressure grid [bar], must be constant spacing in log10(P)
-    - t_profile_k: 1D temperature profile on the same pressure grid [K]
+    - t_min_max: tuple of minimum and maximum temperatures [K]
     - species: list of species names matching columns in vmr_profile
     - vmr_profile: 2D array shape (nP, nSpecies), assumed to be mole fractions (VMR)
 
@@ -129,19 +129,14 @@ def write_helios_delad_table(
     - entropy column is written as 0 (optional in HELIOS and unused by RT).
     """
     p_bar = np.asarray(p_bar, dtype=float)
-    t_profile_k = np.asarray(t_profile_k, dtype=float)
+    t_min, t_max = t_min_max
     vmr_profile = np.asarray(vmr_profile, dtype=float)
 
     _validate_log10_pressure_grid(p_bar)
 
-    if t_profile_k.ndim != 1 or len(t_profile_k) != len(p_bar):
-        raise ValueError("t_profile_k must be 1D and same length as p_bar")
-    if vmr_profile.ndim != 2 or vmr_profile.shape[0] != len(p_bar) or vmr_profile.shape[1] != len(species):
-        raise ValueError("vmr_profile must have shape (nP, nSpecies)")
-
     # Build linear T grid with constant steps, step size <= t_step_max_k.
-    t_min = float(np.nanmin(t_profile_k)) * 0.9
-    t_max = float(np.nanmax(t_profile_k)) * 1.1
+    t_min = t_min * 0.9
+    t_max = t_max * 1.1
     if not np.isfinite(t_min) or not np.isfinite(t_max):
         raise ValueError("Temperature profile contains non-finite values")
     if t_max < t_min:
@@ -470,7 +465,7 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["GGCHEM_PATH"],
     return missing_data
 
 
-def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, relative_humidity=1.0, coupling_speed_up=False):
+def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_min_max, relative_humidity=1.0, coupling_speed_up=False):
     """
     Creates a HELIOS mixfile with constant mixing ratios, limited by condensation.
 
@@ -598,9 +593,14 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, rela
 
     # Generate pre-tabulated kappa/delad + c_p table for HELIOS convection.
     # Written to a shared location and overwritten each iteration.
+    t_min_max_profile = (T_k.min(), T_k.max())
+    t_min = np.min([t_min_max[0], t_min_max_profile[0]])
+    t_max = np.max([t_min_max[1], t_min_max_profile[1]])
+    t_min_max = (t_min, t_max)
+    
     write_helios_delad_table(
         p_bar=p_bar,
-        t_profile_k=T_k,
+        t_min_max=t_min_max,
         species=species_list,
         vmr_profile=vmr,
         out_path=DEFAULT_DELAD_TABLE_PATH,
@@ -625,18 +625,21 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, rela
             delimiter="\t",
         )
         log.info(f"Successfully created constant-VMR mixfile at {helios_mixfile_path}")
+        return t_min_max
     except IOError as e:
         log.error(f"Failed to write mixfile: {e}")
         raise
 
 
-def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in"), coupling_speed_up=False):
+def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in"), coupling_speed_up=False):
     """
     Converts GGchem output (Static_Conc.dat) to a HELIOS mixfile.
 
     Args:
         ggchem_output_path (str): Path to the GGchem output file (e.g., Static_Conc.dat).
         helios_mixfile_path (str): Path to write the output HELIOS mixfile to.
+        t_min_max (tuple): Tuple containing the minimum and maximum temperatures for the delad table.
+        ref_pt (str): Path to the reference profile file.
         coupling_speed_up (bool): Whether to use speed-up coupling with previous mixfile.
     """
     log.info(
@@ -774,9 +777,14 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.
 
     # Generate pre-tabulated kappa/delad + c_p table for HELIOS convection.
     # Written to a shared location and overwritten each iteration.
+    t_min_max_profile = (new_data[:, 1].min(), new_data[:, 1].max())
+    t_min = np.min([t_min_max[0], t_min_max_profile[0]])
+    t_max = np.max([t_min_max[1], t_min_max_profile[1]])
+    t_min_max = (t_min, t_max)
+
     write_helios_delad_table(
         p_bar=new_data[:, 0],
-        t_profile_k=new_data[:, 1],
+        t_min_max=t_min_max,
         species=[str(s) for s in new_header[5:]],
         vmr_profile=new_data[:, 5:],
         out_path=DEFAULT_DELAD_TABLE_PATH,
@@ -801,6 +809,7 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, ref_pt=os.
             delimiter="\t",
         )
         log.info(f"Successfully created HELIOS mixfile at {helios_mixfile_path}")
+        return t_min_max
     except IOError as e:
         log.error(f"Failed to write mixfile: {e}")
         raise
