@@ -14,6 +14,9 @@
 /analyze/contributions+opacities_CIAs.ipynb
 /analyze/plot_phase-diagram.ipynb
 
+/tests
+/chelio_sim/test_*
+
 *.pyc
 
 nohup.out

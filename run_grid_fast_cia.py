@@ -13,6 +13,7 @@ import subprocess
 import os
 import shutil
 import glob
+import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from chelio_sim.mixfile_utils import mol_dict # for triple and critical point data
@@ -90,21 +91,11 @@ def get_mixing_ratios_for_cia_pair(pair):
     
     if mol1 == mol2:
         # Self-CIA: 100% of that molecule
-        if mol1 in species:
-            species[mol1] = 1.0
-        else:
-            # For species not in our base list, add it
-            species[mol1] = 1.0
+        species[mol1] = 1.0
     else:
         # Cross-CIA: 50% each
-        if mol1 in species:
-            species[mol1] = 0.5
-        else:
-            species[mol1] = 0.5
-        if mol2 in species:
-            species[mol2] = 0.5
-        else:
-            species[mol2] = 0.5
+        species[mol1] = 0.5
+        species[mol2] = 0.5
     
     # Convert to command-line argument string
     return ",".join([f"{k}={v}" for k, v in species.items()])
@@ -147,6 +138,66 @@ def restore_default_cia(pair):
         print(f"Warning: Default source {source_filename} not found!")
 
 
+def get_init_pt(dir, name):
+    """
+    Get the initial P-T profile for a simulation from the output directory 'dir'.
+    Extracts Tint from name (e.g., "Tint=200K") and looks for a simulation directory (within output dir) with the same name, except higher Tint.
+    Within this higher Tint directory, looks for a files named "{name}_tp_coupling_{i}.dat" and find the highest i. Returns the path to that file.
+    If anything fails, returns None.
+    """
+
+    tint_match = re.search(r"Tint=(\d+)K", name)
+    if not tint_match:
+        print(f"Warning: Could not extract Tint from name '{name}'")
+        return None
+    
+    tint_value = int(tint_match.group(1))
+    
+    matched_string = tint_match.group(0)
+    name_split = name.split(matched_string)
+    
+    # Initialize trackers
+    lowest_valid_tint = float('inf')
+    best_dir_path = None
+    
+    # 1. Single pass to find the directory with the lowest Tint > tint_value
+    for entry in os.listdir(dir):
+        entry_path = os.path.join(dir, entry)
+        if os.path.isdir(entry_path):
+            pattern = re.escape(name_split[0]) + r"Tint=(\d+)K" + re.escape(name_split[1])
+            entry_tint_match = re.search(pattern, entry)
+            
+            if entry_tint_match:
+                entry_tint_value = int(entry_tint_match.group(1))
+                
+                # Check if it's greater than target AND lower than our current best
+                if entry_tint_value > tint_value and entry_tint_value < lowest_valid_tint:
+                    lowest_valid_tint = entry_tint_value
+                    best_dir_path = entry_path
+                    best_name = entry
+                    
+    # 2. If we found a valid directory, look for the highest 'i' .dat file inside it
+    if best_dir_path:
+        file_pattern = re.compile(rf"{re.escape(best_name)}_tp_coupling_(\d+)\.dat")
+        max_i = -1
+        max_file_path = None
+        
+        for file in os.listdir(best_dir_path):
+            file_match = file_pattern.match(file)
+            if file_match:
+                i_value = int(file_match.group(1))
+                if i_value > max_i:
+                    max_i = i_value
+                    max_file_path = os.path.join(best_dir_path, file)
+
+        if max_file_path:
+            print(f"Found initial P-T profile: {max_file_path}")
+            return max_file_path
+            
+    print(f"Warning: No suitable initial P-T profile found for '{name}' in '{dir}'")
+    return None
+
+
 def run_single_simulation(params):
     """
     Takes a tuple of simulation parameters, constructs the command,
@@ -158,6 +209,8 @@ def run_single_simulation(params):
 
     # Construct a unique name for the run including the CIA source
     sim_name = f"CIA_{cia_source}_Tint={temp}K_Psurf={psurf_bar}bar"
+
+    init_pt_path = get_init_pt(base_out_dir, sim_name)
 
     # Get mixing ratios based on CIA pair (50/50 for cross-CIA, 100% for self-CIA)
     mixing_ratios_str = get_mixing_ratios_for_cia_pair(cia_pair)
@@ -177,6 +230,7 @@ def run_single_simulation(params):
         "--chemistry_mode", "constant",
         "--constant_mixing_ratios", mixing_ratios_str,
         "--outgas_or_manual", "manual",
+        "--init_pt_file", init_pt_path if init_pt_path else "None",
     ]
 
     try:
@@ -310,7 +364,7 @@ if __name__ == "__main__":
         exit(0)
 
     # --- Define Parameter Grid ---
-    temps = [150] # K
+    temps = [145] # K
     psurfs = [1e8]  # dyn/cm^2
 
     base_out_dir = "output/CIA_comparison_HELIOS"

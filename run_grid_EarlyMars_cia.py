@@ -9,7 +9,7 @@ HELIOS parameter file: helios_inputs/param_EarlyMars.dat.
 
 CIA sources tested:
   CO2-H2:  CO2-H2_2018, CO2-H2_2024
-  CO2-CH4: CO2-CH4_2017, CO2-CH4_2020
+  CO2-CH4: CO2-CH4_2017, CO2-CH4_2020, CO2-CH4_2024_main
 """
 import argparse
 import itertools
@@ -39,7 +39,7 @@ DEFAULT_CIA_SOURCES = {
 # CIA sources to test per trace gas species
 CIA_SOURCES_BY_GAS = {
     "H2":  ["CO2-H2_2018_Tex=150K.h5",  "CO2-H2_2024.h5"],
-    "CH4": ["CO2-CH4_2017_Tex=150K.h5", "CO2-CH4_2020.h5"],
+    "CH4": ["CO2-CH4_2017_Tex=150K.h5", "CO2-CH4_2020.h5", "CO2-CH4_2024_main.h5"],
 }
 
 # CIA pair associated with each trace gas

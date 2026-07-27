@@ -99,6 +99,12 @@ def main():
         default=1.0,
         help="Fractional relative humidity cap for H2O in constant chemistry mode (e.g., 0.8 means VMR_H2O <= 0.8 * p_sat(T)/P). Default: 1.0."
     )
+    parser.add_argument(
+        "--init_pt_file",
+        type=str,
+        default=None,
+        help="Path to an initial P-T profile file. If provided, this will override the default initial P-T profile generation."
+    )
 
     # Add overrides for key simulation parameters
     sim_params = [
@@ -184,6 +190,8 @@ def main():
     i_full = config["coupling"]["i_full_convergence"]
 
     t_min_max = [np.inf, 0.0] # initialize global min/max temperature for delad table generation
+
+    started_convection = 0
 
     # Check if run already exists if {name}_coupling_convergence.dat exists and contains "1" or if {name}_tp_coupling_{i_max}.dat exists
     convergence_file = os.path.join(run_output_dir, f"{args.name}_coupling_convergence.dat")
@@ -308,7 +316,44 @@ def main():
                 boa_p = float(sim_p["surface_pressure"])
 
             if i_min == 0:
-                P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
+                if args.init_pt_file and args.init_pt_file != "None":
+                    # Load initial P-T profile from provided file
+                    try:
+                        tp_data = np.loadtxt(args.init_pt_file, skiprows=1)
+                        P_bar = tp_data[:, 0]
+                        T_k = tp_data[:, 1]
+                        log.info(f"Loaded initial P-T profile from {args.init_pt_file}.")
+
+                        try:
+                            nlayer = len(P_bar)
+                            output_file = os.path.join(chelio_path, "../ggchem_inputs/pt_helios.in")
+                            with open(output_file, "w") as f:
+                                f.write("# P [bar], T [K]\n")
+                                for i in range(nlayer):
+                                    f.write(f"{P_bar[i]:.6e} {T_k[i]:.6e}\n")
+                            log.info(f"Successfully wrote P-T profile to {output_file}")
+                        except IOError as e:
+                            log.error(f"Failed to write P-T profile to {output_file}: {e}")
+                            raise
+
+                        try:
+                            # args.init_pt_file has format {dir}/{name}_tp_coupling_{i}.dat
+                            # get {dir}/{name}_started_convection.dat (one line with 0 or 1) and set started_convection accordingly
+                            i_match = args.init_pt_file.split("_tp_coupling_")[-1].split(".dat")[0]
+                            print(f"i_match: {i_match}") # DEBUG
+                            started_convection = args.init_pt_file.replace(f"_tp_coupling_{i_match}.dat", "_started_convection.dat")
+                            started_convection = int(open(started_convection, "r").read().strip())
+                            log.info(f"Loaded started_convection status: {started_convection}")
+                        except Exception as e:
+                            log.warning(f"Failed to load started_convection status from file: {e}. Defaulting to 0.")
+                            started_convection = 0
+                        
+                    except Exception as e:
+                        log.error(f"Failed to load initial P-T profile from {args.init_pt_file}: {e}")
+                        sys.exit(1)
+                else:
+                    # Create initial P-T profile using default method
+                    P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
             else:
                 try:
                     # copy f"{args.name}_tp_coupling_{i_min-1}.dat" to ggchem_inputs/pt_helios.in for the initial run
@@ -351,7 +396,32 @@ def main():
             
             # Create initial P-T profile
             if i_min == 0:
-                P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
+                if args.init_pt_file and args.init_pt_file != "None":
+                    # Load initial P-T profile from provided file
+                    try:
+                        tp_data = np.loadtxt(args.init_pt_file, skiprows=1)
+                        P_bar = tp_data[:, 0]
+                        T_k = tp_data[:, 1]
+                        log.info(f"Loaded initial P-T profile from {args.init_pt_file}.")
+
+                        try:
+                            # args.init_pt_file has format {dir}/{name}_tp_coupling_{i}.dat
+                            # get {dir}/{name}_started_convection.dat (one line with 0 or 1) and set started_convection accordingly
+                            i_match = args.init_pt_file.split("_tp_coupling_")[-1].split(".dat")[0]
+                            print(f"i_match: {i_match}") # DEBUG
+                            started_convection = args.init_pt_file.replace(f"_tp_coupling_{i_match}.dat", "_started_convection.dat")
+                            started_convection = int(open(started_convection, "r").read().strip())
+                            log.info(f"Loaded started_convection status: {started_convection}")
+                        except Exception as e:
+                            log.warning(f"Failed to load started_convection status from file: {e}. Defaulting to 0.")
+                            started_convection = 0
+                        
+                    except Exception as e:
+                        log.error(f"Failed to load initial P-T profile from {args.init_pt_file}: {e}")
+                        sys.exit(1)
+                else:
+                    # Create initial P-T profile using default method
+                    P_bar, T_k = init_pt.create_pt_profile(Teq=500, Pmin=float(sim_p["toa_pressure"]), Pmax=boa_p, return_data=True)
 
                 # Save initial P-T profile
                 initial_tp_path = os.path.join(run_output_dir, f"{args.name}_tp_coupling_-1.dat")
@@ -374,8 +444,6 @@ def main():
                     sys.exit(1)
         
         # --- Coupling Loop ---
-        
-        started_convection = 0
         if i_min >= i_full:
             coupling_speed_up = "yes"
         else:

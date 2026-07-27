@@ -14,7 +14,7 @@ paths:
 simulation_params:
   outgas_or_manual: "manual" # "outgas" or "manual"
   with_outgassed: False
-  toa_pressure: 1.0e-1
+  toa_pressure: 1.0e0
   internal_temp: 100
   surface_albedo: 0.1
   # Atmodeller specific parameters
@@ -52,7 +52,7 @@ coupling:
   i_max: 10 # Maximum coupling iterations
   i_full_convergence: 4 # Iteration to switch to full convergence
   rad_eq_criterion: 1.0e-8
-  helios_max_iter_initial: 1000
+  helios_max_iter_initial: 15000
   helios_max_iter_intermediate: 15000
   helios_max_iter_full: 15000
 
