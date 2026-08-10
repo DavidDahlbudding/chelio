@@ -108,6 +108,9 @@ chelio/
 │  ├─ species.dat           # List of species for HELIOS
 │  └─ species_test.dat
 ├─ run_coupled.py          # Core script to run a single coupled HELIOS-GGchem simulation
+├─ run_fast.py             # Use approximate fast RT with Rosseland mean opacities
+├─ run_grid_fast_cia.py    # Loop over P-T-grid for one or more CIA pair (see 2nd paper for details)
+├─ run_grid_EarlyMars_cia.py    # Benchmark Code against Turbet+ (2020)
 ├─ config.yaml             # Central configuration file for all simulations
 ├─ output/                 # Directory where all simulation results are saved
 │  ├─ ... (further output or specific run directories, e.g., 'test', ...)
@@ -117,8 +120,11 @@ chelio/
     ├─ abundances.py       # Calculates initial abundances
     ├─ init_pt.py          # Creates initial P-T profiles
     ├─ mixfile_utils.py    # Converts GGchem output to HELIOS mixfile format
+    ├─ rt_utils.py         # Approximate fast RT with on-the-fly Rosseland mean calculation*
     ├─ ... (other utilities)
 ```
+
+\* parts taken from [Roccetti+ (2023)](https://doi.org/10.1017/S1473550423000046), [(see code)](https://github.com/giulia-roccetti/Master_Thesis/blob/main/tsurf.py)
 
 ---
 
@@ -126,6 +132,10 @@ chelio/
 
 Accompanying paper:
 
-Habitability of Tidally Heated H$_2$-Dominated Exomoons around Free-Floating Planets
+[Habitability of Tidally Heated H$_2$-Dominated Exomoons around Free-Floating Planets
+Dahlbüdding et al. (2026)](https://doi.org/10.1093/mnras/stag243)
 
+Also used in:
+
+Small Collisions, High Impact: The Sensitivity of Atmospheric Temperatures to Collision-Induced Absorption
 Dahlbüdding et al. (subm.)
