@@ -132,10 +132,10 @@ chelio/
 
 Accompanying paper:
 
-[Habitability of Tidally Heated H$_2$-Dominated Exomoons around Free-Floating Planets
+[Habitability of Tidally Heated H$_2$-Dominated Exomoons around Free-Floating Planets\
 Dahlbüdding et al. (2026)](https://doi.org/10.1093/mnras/stag243)
 
 Also used in:
 
-Small Collisions, High Impact: The Sensitivity of Atmospheric Temperatures to Collision-Induced Absorption
+Small Collisions, High Impact: The Sensitivity of Atmospheric Temperatures to Collision-Induced Absorption\
 Dahlbüdding et al. (subm.)
