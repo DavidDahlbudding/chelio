@@ -189,6 +189,7 @@ def plot_all_iteration_profiles(
     ax=None, 
     cmap_name='viridis', 
     mol_type: str = 'mol',
+    legend: bool = True,
     **kwargs
 ):
     """
@@ -231,7 +232,9 @@ def plot_all_iteration_profiles(
         
         ax.plot(x_data, y_data, color=color, label=label, **kwargs)
     
-    ax.legend()
+    if legend:
+        ax.legend()
+
     return fig, ax
 
 def _get_scalar_data(run: ChelioRun, y_param_key: str, layer_idx: int):
@@ -243,6 +246,10 @@ def _get_scalar_data(run: ChelioRun, y_param_key: str, layer_idx: int):
         run.convert_to_vmr()
             
     data = run.get_iteration_data()
+
+    if 'error' in data.keys():
+        print(data['error'])
+        return np.nan
         
     if y_param_key in run.mol_names:
         mol_idx = run.mol_names.index(y_param_key)

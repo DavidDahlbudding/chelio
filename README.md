@@ -21,57 +21,49 @@ Before running Chelio, ensure you have the following installed and configured:
 You **must** set the following environment variables to the absolute paths of your installations. It's recommended to add these lines to your shell's configuration file (e.g., ~/.bashrc or ~/.zshrc) to make them permanent.
 
 ```bash
-export CHELIO_PATH="/absolute/path/to/your/chelio"
 export GGCHEM_PATH="/absolute/path/to/your/ggchem_installation"
 export HELIOS_PATH="/absolute/path/to/your/helios_installation"
 ```
 * **Action**: Replace /absolute/path/to/... with your actual paths.
 
+Alternatively, you can edit the `config.yaml` file directly and replace `${GGCHEM_PATH}` and `${HELIOS_PATH}` with the absolute paths.
+
 ---
 
 ## Usage
 
-All scripts should be run from the root directory of the `chelio` repository (i.e., where README.md is located).
+All simulations are now run through the main `run_coupled.py` script. All scripts should be run from the root directory of the `chelio` repository.
 
 ### Running a Single Simulation
 
-To run a single coupled HELIOS-GGchem simulation with specific parameters, use `run_coupled.bash`.
+To run a single coupled HELIOS-GGchem simulation, use `run_coupled.py` with a unique name for the run.
 
 ```bash
-bash run_coupled.bash \
-    --TOA_P 1e-2 \
-    --BOA_P 1e7 \
-    --TEMP 300 \
-    --ALBEDO 0.15 \
-    --CplusO 1e-3 \
-    --CtoO 0.59 \
-    --a_N 1e-4
-    # OUT_DIR defaults to "output", NAME defaults to "test"
-    # To specify, e.g.: --OUT_DIR "output/eqChem" --NAME "Earth_P0=1e7_Tint=200_CtoO=0.1"
+python3 run_coupled.py --name "TestRun"
 ```
 
-**Key Parameters (with defaults if not specified):**
+This will run a simulation named "TestRun" using the default parameters specified in `config.yaml`.
 
-* `--TOA_P`: Top of Atmosphere Pressure (in units of 1e-6 bar). Default: 1e-1
-* `--BOA_P`: Bottom of Atmosphere Pressure (1e-6 bar). Default: 1e6
-* `--TEMP`: Internal Temperature (K). Default: 200
-* `--ALBEDO`: Surface Albedo (dimensionless). Default: 0.1
-* `--CplusO`: Total Carbon + Oxygen abundance relative to H. Default: 1e-3
-* `--CtoO`: Carbon-to-Oxygen ratio. Default: 0.59
-* `--a_N`: Nitrogen abundance. Default: 0.0
-* `--i_min`: Starting coupling iteration index (useful for resuming runs). Default: 0
-* `--OUT_DIR`: Path for the general output directory (relative to `CHELIO_PATH`). This directory will be created if it doesn't exist. Default: "output"
-* `--NAME`: A unique name for this simulation, used for output directory of a specific run and file prefixes. Default: "test"
+### Overriding Parameters
+
+You can override any simulation parameter from the config file via command-line flags. For example, to run a simulation with a different internal temperature:
+
+```bash
+python3 run_coupled.py --name "HotPlanetRun" --internal_temp 300
+```
+This is equivalent to the old `run_coupled.bash` script but offers more flexibility through the central `config.yaml` file.
 
 ### Running a Parameter Grid Exploration
 
-To run multiple simulations across a defined parameter space, use `multiple_runs.bash`. This script iterates through arrays of atmospheric and chemical parameters, calling `run_coupled.bash` for each combination.
-
-To modify the parameter ranges, edit the `BOA_Ps`, `TEMPs`, `CplusOs`, and `CtoOs` arrays directly within the `multiple_runs.bash` script.
+To run multiple simulations across a defined parameter space, you can use a simple bash loop that calls `run_coupled.py`. For example, to iterate over different C/H ratios:
 
 ```bash
-bash multiple_runs.bash
+for CTOH_RATIO in 0.5 1.0 1.5; do
+    RUN_NAME="MyRun_CtoH_${CTOH_RATIO}"
+    python3 run_coupled.py --name "${RUN_NAME}" --ctoh_ratio "${CTOH_RATIO}"
+done
 ```
+This replaces the functionality of the old `multiple_runs.bash` script.
 
 ---
 
@@ -115,19 +107,24 @@ chelio/
 │  ├─ param_test.dat
 │  ├─ species.dat           # List of species for HELIOS
 │  └─ species_test.dat
-├─ multiple_runs.bash      # Script to run simulations across a parameter grid
-├─ run_coupled.bash        # Core script to run a single coupled HELIOS-GGchem simulation
+├─ run_coupled.py          # Core script to run a single coupled HELIOS-GGchem simulation
+├─ run_fast.py             # Use approximate fast RT with Rosseland mean opacities
+├─ run_grid_fast_cia.py    # Loop over P-T-grid for one or more CIA pair (see 2nd paper for details)
+├─ run_grid_EarlyMars_cia.py    # Benchmark Code against Turbet+ (2020)
+├─ config.yaml             # Central configuration file for all simulations
 ├─ output/                 # Directory where all simulation results are saved
 │  ├─ ... (further output or specific run directories, e.g., 'test', ...)
-└─ source/                 # Python utility scripts
-    ├─ calc_abundances.py     # Calculates initial abundances for GGchem
-    ├─ calc_abundances_benchmark.py
-    ├─ calc_escape.py         # Calculate stability w.r.t. Jeans escape (assumes const. g and, above top layer, const. T)
-    ├─ convert_mixfile.py     # Converts GGchem output to HELIOS mixfile format
-    ├─ convert_tp.py          # Converts T(P) profiles from HELIOS to GGchem-readable format
-    ├─ create_pt.py           # Creates initial P-T profiles
-    └─ mark_bad_last_iters.py # Marks problematic iterations in output
+└─ chelio_sim/             # Python package for simulation logic and utilities
+    ├─ __init__.py
+    ├─ external_runners.py # Wrappers for HELIOS and GGchem
+    ├─ abundances.py       # Calculates initial abundances
+    ├─ init_pt.py          # Creates initial P-T profiles
+    ├─ mixfile_utils.py    # Converts GGchem output to HELIOS mixfile format
+    ├─ rt_utils.py         # Approximate fast RT with on-the-fly Rosseland mean calculation*
+    ├─ ... (other utilities)
 ```
+
+\* parts taken from [Roccetti+ (2023)](https://doi.org/10.1017/S1473550423000046), [(see code)](https://github.com/giulia-roccetti/Master_Thesis/blob/main/tsurf.py)
 
 ---
 
@@ -135,6 +132,10 @@ chelio/
 
 Accompanying paper:
 
-Habitability of Tidally Heated H$_2$-Dominated Exomoons around Free-Floating Planets
+[Habitability of Tidally Heated H$_2$-Dominated Exomoons around Free-Floating Planets
+Dahlbüdding et al. (2026)](https://doi.org/10.1093/mnras/stag243)
 
+Also used in:
+
+Small Collisions, High Impact: The Sensitivity of Atmospheric Temperatures to Collision-Induced Absorption
 Dahlbüdding et al. (subm.)

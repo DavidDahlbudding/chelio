@@ -1,0 +1,61 @@
+# Central configuration for Chelio simulations
+# ---
+# The script supports environment variables using the ${VAR_NAME} syntax.
+# You can set these variables in your shell (e.g., export GGCHEM_PATH=...)
+# or replace the variables with absolute paths directly.
+
+paths:
+  # If null, the script will determine the path automatically.
+  chelio_path: null
+  # --- USER MUST SET THESE ENVIRONMENT VARIABLES OR EDIT THE PATHS ---
+  ggchem_path: "${GGCHEM_PATH}"
+  helios_path: "${HELIOS_PATH}"
+
+simulation_params:
+  outgas_or_manual: "manual" # "outgas" or "manual"
+  with_outgassed: False
+  toa_pressure: 1.0e0
+  internal_temp: 100
+  surface_albedo: 0.1
+  # Atmodeller specific parameters
+  melt_temp: 2000
+  melt_frac: 1.0
+  h_ocean: 1.0 # H content in Earth oceans equivalent
+  ctoh_ratio: 1.0 # C/H mass ratio
+  ntoc_ratio: 0.1 # N/C mass ratio
+  fO2: -3 # Oxygen fugacity fO2 [delta IW]
+  stoc_ratio: null # S/C mass ratio
+  cltoc_ratio: null # Cl/C mass ratio
+  min_boa_pressure: 1.0e6 # dyn/cm^2 (1e6 = 1 bar)
+  max_boa_pressure: 1.0e9 # dyn/cm^2
+  # Manual specific parameters
+  surface_pressure: 1.0e7 # dyn/cm^2 (1e6 = 1 bar)
+  a_h: 0.99 # H abundance
+  a_c: 0.00371 # C abundance
+  a_o: 0.00629 # O abundance
+  a_n: 0.0001 # N abundance
+  # No Eq Chem
+  chemistry_mode: "ggchem" # "constant" or "ggchem"
+  constant_mixing_ratios:
+    N2: 0.00
+    CH4: 0.01
+    CO2: 0.01
+    H2: 0.97
+    H2O: 0.01
+
+planet_params:
+  g: 981 # cm/s^2
+
+coupling:
+  with_ggchem: True
+  i_min: 0 # Starting coupling iteration
+  i_max: 10 # Maximum coupling iterations
+  i_full_convergence: 4 # Iteration to switch to full convergence
+  rad_eq_criterion: 1.0e-8
+  helios_max_iter_initial: 15000
+  helios_max_iter_intermediate: 15000
+  helios_max_iter_full: 15000
+
+logging:
+  level: "INFO" # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_file_name: "run.log"

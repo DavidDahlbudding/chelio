@@ -1,7 +1,7 @@
 import numpy as np
 from pathlib import Path
 import warnings
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Callable
 
 # Utility functions for formatting run names, adapted from notebooks
 def _format_e_nums(num):
@@ -57,6 +57,7 @@ class ChelioRun:
         self.mol_names: List[str] = []
         self.dust_names: List[str] = []
         self.num_iterations_read = 0
+        self.iterations_read = np.array([])
         self.final_convergence_status = False
         self.escape_time_yrs = np.nan
 
@@ -84,67 +85,114 @@ class ChelioRun:
         self.dust_to_gas_mr: np.ndarray = np.array([])
         self.n_tots: np.ndarray = np.array([])
 
-    def read_data(self):
+    def read_data(self, ref_p_toa=1e-1):
         """
         Reads all data files associated with the run from disk.
         Optimized for 'last' load_mode to save memory.
+        ref_p_toa is the reference pressure at the top of the atmosphere in dyn/cm^2 (1e0 = 1e-6 bar)
+        
+        Supports two file formats:
+        1. Standard format with Static_Conc files (full chemistry data)
+        2. Minimal format with only vertical_mix files (VMR-only data)
         """
+        # First, determine available iterations by checking vertical_mix files
         i = 0
         last_valid_i = -1
         while True:
-            conc_path = self.run_path / f"Static_Conc_{i}.dat"
+            conc_path = self.run_path / f"vertical_mix_{i}.dat"
             if not conc_path.exists():
                 break
             last_valid_i = i
             i += 1
         
-        if last_valid_i == -1:
+        if last_valid_i == -1 and self.load_mode in ['last', 'final', 'all']:
+            print(f"No valid data found for run {self.run_name}")
             self._populate_with_nan()
             return
             
-        if self.load_mode == 'last':
-            indices_to_load = [last_valid_i]
-        else: # load_mode == 'all'
-            indices_to_load = range(last_valid_i + 1)
+        # Determine which iterations to load
+        indices_to_load = self._determine_indices_to_load(last_valid_i)
+        if indices_to_load is None:
+            return
         
+        # Check if this is a Static_Conc run or vertical_mix-only run
+        first_static_conc = self.run_path / f"Static_Conc_{indices_to_load[0]}.dat"
+        
+        if first_static_conc.exists():
+            # Standard format: read from Static_Conc files
+            self._read_from_static_conc(indices_to_load, ref_p_toa)
+        else:
+            # Minimal format: read from vertical_mix files only
+            self._read_from_vertical_mix_only(indices_to_load, ref_p_toa)
+
+    def _determine_indices_to_load(self, last_valid_i):
+        """Determine which iteration indices to load based on load_mode."""
+        if self.load_mode == 'last' or self.load_mode == 'final':
+            return [last_valid_i]
+        elif self.load_mode == 'all':
+            return list(range(last_valid_i + 1))
+        elif isinstance(self.load_mode, int):
+            if self.load_mode > last_valid_i:
+                raise ValueError(f"Invalid load_mode: Index to load ({self.load_mode}) > last valid index ({last_valid_i})")
+            return [self.load_mode]
+        elif isinstance(self.load_mode, str):
+            return [self.load_mode]
+        elif isinstance(self.load_mode, list):
+            return self.load_mode
+        else:
+            raise ValueError(f"Invalid load_mode: {self.load_mode}")
+
+    def _read_from_static_conc(self, indices_to_load, ref_p_toa):
+        """
+        Read data from Static_Conc files (standard full-chemistry format).
+        """
         data_frames = []
         mus_list = []
         altitudes_list = []
         convective_list = []
 
         # Read header from the first available file to initialize dimensions
-        self._read_header_info(self.run_path / f"Static_Conc_0.dat")
+        self._read_header_info(self.run_path / f"Static_Conc_{indices_to_load[0]}.dat")
         
-        for i in indices_to_load:
-            conc_path = self.run_path / f"Static_Conc_{i}.dat"
-            # We assume file exists from the check above
+        for i, index in enumerate(indices_to_load):
+            conc_path = self.run_path / f"Static_Conc_{index}.dat"
             with warnings.catch_warnings():
-                warnings.simplefilter("error", UserWarning)
+                warnings.simplefilter("ignore", UserWarning)
                 try:
                     d = np.loadtxt(conc_path, skiprows=3)
+                    if d.shape == (0,):
+                        raise UserWarning(f"Static_Conc_{index}.dat is empty")
+                    elif len(d.shape) == 1:
+                        d = d[np.newaxis, :]
                     data_frames.append(d)
-                    
+
                     # Load associated files
-                    mu_path = self.run_path / f"vertical_mix_{i}.dat"
+                    mu_path = self.run_path / f"vertical_mix_{index}.dat"
                     if mu_path.exists():
                         mus_list.append(np.loadtxt(mu_path, skiprows=1, usecols=3))
-                    else: # If any file is missing, it's safer to add NaNs
+                    else:
                         mus_list.append(np.full(self.n_layers, np.nan))
                     
                     tp_path = self.run_path / f"{self.run_name}_tp.dat"
+                    tp_alt_path = self.run_path / f"extra_info_{index}.dat"
                     if tp_path.exists():
                         altitudes_list.append(np.loadtxt(tp_path, skiprows=2, usecols=3))
                         convective_list.append(np.loadtxt(tp_path, skiprows=2, usecols=6))
+                    elif tp_alt_path.exists():
+                        altitudes_list.append(np.loadtxt(tp_alt_path, skiprows=1, usecols=3))
+                        convective_list.append(np.loadtxt(tp_alt_path, skiprows=1, usecols=4))
                     else:
                         altitudes_list.append(np.full(self.n_layers, np.nan))
                         convective_list.append(np.full(self.n_layers, np.nan))
 
-                except (UserWarning, IndexError, ValueError): # Catches malformed files
-                    data_frames.append(np.full((self.n_layers, data_frames[0].shape[1]), np.nan))
+                except (UserWarning, IndexError, ValueError):
+                    data_frames.append(np.full((self.n_layers, 4+self.n_elem+self.n_mol+2*self.n_dust+self.n_elem+4), np.nan))
                     mus_list.append(np.full(self.n_layers, np.nan))
                     altitudes_list.append(np.full(self.n_layers, np.nan))
                     convective_list.append(np.full(self.n_layers, np.nan))
+                    self._populate_with_nan()
 
+        self.iterations_read = np.array(list(indices_to_load))
         self.num_iterations_read = len(data_frames)
         if not data_frames:
             self._populate_with_nan()
@@ -152,15 +200,181 @@ class ChelioRun:
 
         self._process_data_frames(data_frames, mus_list, altitudes_list, convective_list)
         self._read_escape_time()
-        self._check_convergence(data_frames[-1])
-        
-        if self.load_mode == 'last' and not self.final_convergence_status:
-            self._populate_with_nan()
+        self._check_convergence(data_frames[-1], ref_p_toa=ref_p_toa)
 
-    def _read_header_info(self, file_path):
+    def _read_from_vertical_mix_only(self, indices_to_load, ref_p_toa):
+        """
+        Read data from vertical_mix files only (minimal format without full chemistry).
+        
+        vertical_mix format:
+        Header: P(bar) T(k) n_<tot>(cm-3) m(u) e- [mol1] [mol2] ...
+        Data columns: pressure, temperature, n_tot, mu, then species VMRs
+        
+        Note: VMRs are stored directly (not as log concentrations).
+        """
+        # Read header to get dimensions and species names
+        first_index = indices_to_load[0]
+        self._read_header_info(
+            self.run_path / f"Static_Conc_{first_index}.dat",  # Won't exist, triggers fallback
+            fallback_index=first_index
+        )
+        
+        if self.n_layers == 0:
+            self._populate_with_nan()
+            return
+        
+        pressures_list = []
+        temperatures_list = []
+        n_tots_list = []
+        mus_list = []
+        mols_vmr_list = []
+        altitudes_list = []
+        convective_list = []
+        
+        for index in indices_to_load:
+            vertical_mix_path = self.run_path / f"vertical_mix_{index}.dat"
+            
+            try:
+                data = np.loadtxt(vertical_mix_path, skiprows=1)
+                if len(data.shape) == 1:
+                    data = data[np.newaxis, :]
+                
+                # Extract columns: P(bar), T(K), n_tot(cm^-3), mu, species VMRs
+                pressures_list.append(data[:, 0])
+                temperatures_list.append(data[:, 1])
+                n_tots_list.append(data[:, 2])
+                mus_list.append(data[:, 3])
+                mols_vmr_list.append(data[:, 4:])  # VMRs directly (not log)
+                
+                # Load altitude and convective info from extra_info if available
+                tp_path = self.run_path / f"{self.run_name}_tp.dat"
+                tp_alt_path = self.run_path / f"extra_info_{index}.dat"
+                if tp_path.exists():
+                    altitudes_list.append(np.loadtxt(tp_path, skiprows=2, usecols=3))
+                    convective_list.append(np.loadtxt(tp_path, skiprows=2, usecols=6))
+                elif tp_alt_path.exists():
+                    altitudes_list.append(np.loadtxt(tp_alt_path, skiprows=1, usecols=3))
+                    convective_list.append(np.loadtxt(tp_alt_path, skiprows=1, usecols=4))
+                else:
+                    altitudes_list.append(np.full(data.shape[0], np.nan))
+                    convective_list.append(np.full(data.shape[0], np.nan))
+                    
+            except Exception as e:
+                warnings.warn(f"Failed to read vertical_mix_{index}.dat: {e}")
+                pressures_list.append(np.full(self.n_layers, np.nan))
+                temperatures_list.append(np.full(self.n_layers, np.nan))
+                n_tots_list.append(np.full(self.n_layers, np.nan))
+                mus_list.append(np.full(self.n_layers, np.nan))
+                mols_vmr_list.append(np.full((self.n_layers, self.n_mol), np.nan))
+                altitudes_list.append(np.full(self.n_layers, np.nan))
+                convective_list.append(np.full(self.n_layers, np.nan))
+        
+        # Store data in class attributes
+        self.iterations_read = np.array(list(indices_to_load))
+        self.num_iterations_read = len(pressures_list)
+        
+        self.pressures_bar = np.array(pressures_list)
+        self.temperatures_K = np.array(temperatures_list)
+        self.n_tots = np.array(n_tots_list)
+        self.mus = np.array(mus_list)
+        self.altitudes_cm = np.array(altitudes_list)
+        self.convective_flags = np.array(convective_list)
+        
+        # For vertical_mix-only format, VMRs are stored directly
+        # We store them in mols_vmr and mark as converted
+        self.mols_vmr = np.array(mols_vmr_list)
+        
+        # nHtots is typically hydrogen number density; for vertical_mix we have n_tot
+        # Set nHtots to n_tots as a reasonable approximation (or nan if not applicable)
+        self.nHtots = self.n_tots.copy()
+        
+        # Initialize empty arrays for unavailable data
+        shape = (self.num_iterations_read, self.n_layers)
+        self.atoms_raw = np.array([]).reshape(self.num_iterations_read, self.n_layers, 0)
+        self.mols_raw = np.array([]).reshape(self.num_iterations_read, self.n_layers, 0)  # Not used in vmr-only mode
+        self.supersats = np.array([]).reshape(self.num_iterations_read, self.n_layers, 0)
+        self.dusts_raw = np.array([]).reshape(self.num_iterations_read, self.n_layers, 0)
+        self.eps_atoms_raw = np.array([]).reshape(self.num_iterations_read, self.n_layers, 0)
+        self.dust_to_gas_raw = np.full(shape, np.nan)
+        self.dust_vol = np.full(shape, np.nan)
+        
+        # Set converted arrays for atoms and dust to empty
+        self.atoms_vmr = np.array([]).reshape(self.num_iterations_read, self.n_layers, 0)
+        self.dusts_vmr = np.array([]).reshape(self.num_iterations_read, self.n_layers, 0)
+        self.eps_atoms_mr = np.array([]).reshape(self.num_iterations_read, self.n_layers, 0)
+        self.dust_to_gas_mr = np.full(shape, np.nan)
+        
+        # Mark as already converted since VMRs are stored directly
+        self.is_converted = True
+        
+        self._read_escape_time()
+        self._check_convergence_vertical_mix_only(ref_p_toa)
+
+    def _check_convergence_vertical_mix_only(self, ref_p_toa=1e-1):
+        """
+        Check convergence for vertical_mix-only runs.
+        ref_p_toa is reference pressure at TOA in bar (default 1e-1 bar = 1e5 dyn/cm^2)
+        """
+        if self.pressures_bar.size == 0 or np.all(np.isnan(self.pressures_bar)):
+            self.final_convergence_status = False
+            return
+        
+        # Check if final pressure at TOA matches expected value
+        # For vertical_mix, pressure is already in bar
+        final_p_toa = self.pressures_bar[-1, -1]  # Last iteration, last layer (TOA)
+        
+        # Convert ref_p_toa from dyn/cm^2 to bar for comparison if needed
+        # Based on original code, ref_p_toa=1e-1 dyn/cm^2 = 1e-7 bar
+        # But looking at the data, TOA pressure is 1e-6 bar
+        # Let's check if the pressure profile makes sense
+        ref_p_toa_bar = ref_p_toa * 1e-6  # Convert dyn/cm^2 to bar
+        
+        failed_pressure = not np.isclose(final_p_toa, ref_p_toa_bar, rtol=0.1)
+        failed_temperature = np.all(self.temperatures_K[-1] == 1.001)
+        
+        if failed_pressure or failed_temperature:
+            self.final_convergence_status = False
+        else:
+            self.final_convergence_status = True
+
+    def _read_header_info(self, file_path, fallback_index=0):
+        """
+        Reads header information from Static_Conc file, or falls back to vertical_mix if unavailable.
+        Sets n_elem, n_mol, n_dust, n_layers and species names.
+        """
         if not file_path.exists():
-             self.n_elem, self.n_mol, self.n_dust, self.n_layers = 0,0,0,0
-             return
+            # Fall back to vertical_mix file
+            vertical_mix_path = self.run_path / f"vertical_mix_{fallback_index}.dat"
+            if not vertical_mix_path.exists():
+                self.n_elem, self.n_mol, self.n_dust, self.n_layers = 0, 0, 0, 0
+                return
+            try:
+                # Read header line from vertical_mix
+                # Format: P(bar) T(k) n_<tot>(cm-3) m(u) e- [mol1] [mol2] ...
+                header = np.loadtxt(vertical_mix_path, skiprows=0, max_rows=1, dtype=str)
+                data = np.loadtxt(vertical_mix_path, skiprows=1)
+                if len(data.shape) == 1:
+                    data = data[np.newaxis, :]
+                
+                # Columns: P, T, n_tot, mu, then species starting with e-
+                # Species columns start at index 4
+                n_species = data.shape[1] - 4
+                self.n_elem = 0  # No atomic species in vertical_mix format
+                self.n_mol = n_species  # All species treated as "molecules" (includes e-)
+                self.n_dust = 0  # No dust data
+                self.n_layers = data.shape[0]
+                
+                # Extract molecule names from header (columns 4 onwards)
+                self.mol_names = list(header[4:])
+                self.atom_names = []
+                self.dust_names = []
+                return
+            except Exception as e:
+                warnings.warn(f"Failed to read header from vertical_mix: {e}")
+                self.n_elem, self.n_mol, self.n_dust, self.n_layers = 0, 0, 0, 0
+                return
+        
+        # Standard Static_Conc format
         dimension = np.genfromtxt(file_path, dtype=int, max_rows=1, skip_header=1)
         self.n_elem, self.n_mol, self.n_dust, self.n_layers = dimension
         
@@ -171,6 +385,17 @@ class ChelioRun:
         self.dust_names = [name[1:] for name in raw_dust_names]
 
     def _process_data_frames(self, data_frames, mus_list, altitudes_list, convective_list):
+        # get max number of layers
+        #max_n_layers = max([df.shape[0] for df in data_frames])
+        max_n_layers = self.n_layers
+        for idx, df in enumerate(data_frames):
+            if df.shape[0] != max_n_layers:
+                df = np.pad(df, ((0, max_n_layers - df.shape[0]), (0, 0)), mode='constant', constant_values=np.nan)
+                data_frames[idx] = df
+        #if data_frames[-1].shape[1] != self.n_layers:
+        #    # pad with NaNs
+        #    data_frames[-1] = np.pad(data_frames[-1], ((0, self.n_layers - data_frames[-1].shape[0]), (0, 0)), mode='constant', constant_values=np.nan)
+
         all_data = np.array(data_frames) # (n_iter, n_layers, n_cols)
         
         self.pressures_bar = all_data[:, :, 2] * 1e-6
@@ -193,35 +418,56 @@ class ChelioRun:
         self.convective_flags = np.array(convective_list) if convective_list else np.full((self.num_iterations_read, self.n_layers), np.nan)
 
     def _populate_with_nan(self):
+        """
+        Populate all data arrays with NaN values when data loading fails.
+        """
         # Ensure header is read to get layer count, even for failed runs, if possible
-        if self.n_layers is None:
-            self._read_header_info(self.run_path / "Static_Conc_0.dat")
+        if self.n_layers is None or self.n_layers == 0:
+            self._read_header_info(self.run_path / "Static_Conc_0.dat", fallback_index=0)
         
-        shape = (1, self.n_layers if self.n_layers else 1)
+        n_layers = self.n_layers if self.n_layers else 1
+        n_elem = self.n_elem if self.n_elem else 0
+        n_mol = self.n_mol if self.n_mol else 0
+        n_dust = self.n_dust if self.n_dust else 0
+        
+        shape = (1, n_layers)
         nan_array = np.full(shape, np.nan)
-        self.pressures_bar = nan_array
-        self.temperatures_K = nan_array
-        self.altitudes_cm = nan_array
-        self.nHtots = nan_array
-        self.dust_to_gas_raw = nan_array
-        self.dust_vol = nan_array
-        self.mus = nan_array
-        self.convective_flags = nan_array
+        
+        self.pressures_bar = nan_array.copy()
+        self.temperatures_K = nan_array.copy()
+        self.altitudes_cm = nan_array.copy()
+        self.nHtots = nan_array.copy()
+        self.n_tots = nan_array.copy()
+        self.dust_to_gas_raw = nan_array.copy()
+        self.dust_vol = nan_array.copy()
+        self.mus = nan_array.copy()
+        self.convective_flags = nan_array.copy()
 
-        self.atoms_raw = np.full(shape + (self.n_elem if self.n_elem else 1,), np.nan)
-        self.mols_raw = np.full(shape + (self.n_mol if self.n_mol else 1,), np.nan)
-        self.supersats = np.full(shape + (self.n_dust if self.n_dust else 1,), np.nan)
-        self.dusts_raw = np.full(shape + (self.n_dust if self.n_dust else 1,), np.nan)
-        self.eps_atoms_raw = np.full(shape + (self.n_elem if self.n_elem else 1,), np.nan)
+        # Raw arrays (for Static_Conc format)
+        self.atoms_raw = np.full(shape + (max(n_elem, 1),), np.nan) if n_elem > 0 else np.array([]).reshape(1, n_layers, 0)
+        self.mols_raw = np.full(shape + (max(n_mol, 1),), np.nan) if n_mol > 0 else np.array([]).reshape(1, n_layers, 0)
+        self.supersats = np.full(shape + (max(n_dust, 1),), np.nan) if n_dust > 0 else np.array([]).reshape(1, n_layers, 0)
+        self.dusts_raw = np.full(shape + (max(n_dust, 1),), np.nan) if n_dust > 0 else np.array([]).reshape(1, n_layers, 0)
+        self.eps_atoms_raw = np.full(shape + (max(n_elem, 1),), np.nan) if n_elem > 0 else np.array([]).reshape(1, n_layers, 0)
+        
+        # VMR arrays
+        self.atoms_vmr = np.full(shape + (max(n_elem, 1),), np.nan) if n_elem > 0 else np.array([]).reshape(1, n_layers, 0)
+        self.mols_vmr = np.full(shape + (max(n_mol, 1),), np.nan) if n_mol > 0 else np.array([]).reshape(1, n_layers, 0)
+        self.dusts_vmr = np.full(shape + (max(n_dust, 1),), np.nan) if n_dust > 0 else np.array([]).reshape(1, n_layers, 0)
+        self.eps_atoms_mr = np.full(shape + (max(n_elem, 1),), np.nan) if n_elem > 0 else np.array([]).reshape(1, n_layers, 0)
+        self.dust_to_gas_mr = nan_array.copy()
+        
         self.final_convergence_status = False
+        self.iterations_read = np.array([np.nan])
+        self.num_iterations_read = 1
 
 
-    def _check_convergence(self, last_data_frame):
+    def _check_convergence(self, last_data_frame, ref_p_toa=1e-1):
         # Based on comments and logic from notebooks, a run has not converged if:
         # 1. The final pressure in the top layer is not 1e-1 dyn/cm^2.
         # 2. The temperature profile is a dummy array of all 1.001 K.
         # This logic is more robust than the original notebook code.
-        failed_pressure = last_data_frame[-1, 2] != 1e-1
+        failed_pressure = last_data_frame[-1, 2] != ref_p_toa
         failed_temperature = np.all(last_data_frame[:, 0] == 1.001)
 
         if failed_pressure or failed_temperature:
@@ -234,7 +480,7 @@ class ChelioRun:
         if escape_file.exists():
             with open(escape_file, 'r') as f:
                 try:
-                    last_line = f.readlines()[-1]
+                    last_line = f.readlines()[2]
                     self.escape_time_yrs = float(last_line.split()[-1])
                 except (IndexError, ValueError):
                     self.escape_time_yrs = np.nan
@@ -244,35 +490,70 @@ class ChelioRun:
     def convert_to_vmr(self):
         """
         Converts raw logarithmic data to volume/mass mixing ratios.
+        
+        For vertical_mix-only runs (where is_converted is already True),
+        this method does nothing as VMRs are stored directly.
         """
-        if self.is_converted or self.atoms_raw.size == 0 or np.all(np.isnan(self.atoms_raw)):
+        if self.is_converted:
+            return
+        
+        # Check if we have valid data to convert
+        has_atoms = self.atoms_raw.size > 0 and not np.all(np.isnan(self.atoms_raw))
+        has_mols = self.mols_raw.size > 0 and not np.all(np.isnan(self.mols_raw))
+        
+        if not has_mols:
+            # No molecular data to convert
+            self.is_converted = True
             return
 
-        # Calculate n_tots (total number density)
-        self.n_tots = np.sum(10**self.mols_raw, axis=-1) + np.sum(10**self.atoms_raw, axis=-1)
+        # Calculate n_tots (total number density) from raw log concentrations
+        n_tots_from_mols = np.sum(10**self.mols_raw, axis=-1)
+        n_tots_from_atoms = np.sum(10**self.atoms_raw, axis=-1) if has_atoms else 0
+        self.n_tots = n_tots_from_mols + n_tots_from_atoms
         self.n_tots = self.n_tots[..., np.newaxis]
 
         # Convert atomic abundances (log(cm^-3)) to volume mixing ratios
-        self.atoms_vmr = 10**self.atoms_raw / self.n_tots
+        if has_atoms:
+            self.atoms_vmr = 10**self.atoms_raw / self.n_tots
+        else:
+            self.atoms_vmr = np.array([]).reshape(self.mols_raw.shape[0], self.mols_raw.shape[1], 0)
         
         # Convert molecular abundances (log(cm^-3)) to volume mixing ratios
         self.mols_vmr = 10**self.mols_raw / self.n_tots
 
         # Convert dust concentrations from log10(nCond/nHtot) to volume mixing ratios
-        self.dusts_vmr = 10**self.dusts_raw * self.nHtots[..., np.newaxis] / self.n_tots
+        has_dust = self.dusts_raw.size > 0 and not np.all(np.isnan(self.dusts_raw))
+        if has_dust:
+            self.dusts_vmr = 10**self.dusts_raw * self.nHtots[..., np.newaxis] / self.n_tots
+        else:
+            self.dusts_vmr = np.array([]).reshape(self.mols_raw.shape[0], self.mols_raw.shape[1], 0)
 
         # Convert elemental abundances
-        self.eps_atoms_mr = 10**self.eps_atoms_raw
-        self.eps_atoms_mr /= np.sum(self.eps_atoms_mr, axis=-1, keepdims=True)
+        has_eps = self.eps_atoms_raw.size > 0 and not np.all(np.isnan(self.eps_atoms_raw))
+        if has_eps:
+            self.eps_atoms_mr = 10**self.eps_atoms_raw
+            eps_sum = np.sum(self.eps_atoms_mr, axis=-1, keepdims=True)
+            # Avoid division by zero
+            eps_sum = np.where(eps_sum > 0, eps_sum, 1.0)
+            self.eps_atoms_mr /= eps_sum
+        else:
+            self.eps_atoms_mr = np.array([]).reshape(self.mols_raw.shape[0], self.mols_raw.shape[1], 0)
 
         # Convert dust-to-gas ratio
-        self.dust_to_gas_mr = 10**self.dust_to_gas_raw
+        has_d2g = self.dust_to_gas_raw.size > 0 and not np.all(np.isnan(self.dust_to_gas_raw))
+        if has_d2g:
+            self.dust_to_gas_mr = 10**self.dust_to_gas_raw
+        else:
+            self.dust_to_gas_mr = np.full_like(self.pressures_bar, np.nan)
         
         self.is_converted = True
 
     def get_iteration_data(self, iteration_index: int = -1) -> Dict[str, Any]:
         """
         Returns a dictionary of all processed data for a specific iteration.
+        
+        For vertical_mix-only runs, atoms_vmr, dusts_vmr, supersats, eps_atoms_mr,
+        and dust_vol will be empty arrays.
         """
         if not self.is_converted:
             self.convert_to_vmr()
@@ -281,30 +562,31 @@ class ChelioRun:
             return { "error": "No data loaded." }
             
         try:
-            # Slicing with ... to handle both 'all' and 'last' modes gracefully
-            idx = (Ellipsis, iteration_index) if self.load_mode == 'all' else (Ellipsis,)
-            
             data = {
                 "pressure_bar": self.pressures_bar[iteration_index],
                 "temperature_K": self.temperatures_K[iteration_index],
                 "altitude_cm": self.altitudes_cm[iteration_index],
-                "nHtot": self.nHtots[iteration_index],
+                "nHtot": self.nHtots[iteration_index] if self.nHtots.size > 0 else np.array([]),
+                "n_tot": self.n_tots[iteration_index] if hasattr(self, 'n_tots') and self.n_tots is not None and self.n_tots.size > 0 else np.array([]),
                 "mu": self.mus[iteration_index],
                 "convective_flag": self.convective_flags[iteration_index],
                 "atom_names": self.atom_names,
                 "mol_names": self.mol_names,
                 "dust_names": self.dust_names,
-                "atoms_vmr": self.atoms_vmr[iteration_index],
-                "mols_vmr": self.mols_vmr[iteration_index],
-                "dusts_vmr": self.dusts_vmr[iteration_index],
-                "supersats": self.supersats[iteration_index],
-                "eps_atoms_mr": self.eps_atoms_mr[iteration_index],
-                "dust_to_gas_mr": self.dust_to_gas_mr[iteration_index],
-                "dust_vol": self.dust_vol[iteration_index],
+                "atoms_vmr": self.atoms_vmr[iteration_index] if self.atoms_vmr.size > 0 else np.array([]),
+                "mols_vmr": self.mols_vmr[iteration_index] if self.mols_vmr.size > 0 else np.array([]),
+                "dusts_vmr": self.dusts_vmr[iteration_index] if self.dusts_vmr.size > 0 else np.array([]),
+                "supersats": self.supersats[iteration_index] if self.supersats.size > 0 else np.array([]),
+                "eps_atoms_mr": self.eps_atoms_mr[iteration_index] if self.eps_atoms_mr.size > 0 else np.array([]),
+                "dust_to_gas_mr": self.dust_to_gas_mr[iteration_index] if self.dust_to_gas_mr.size > 0 else np.nan,
+                "dust_vol": self.dust_vol[iteration_index] if self.dust_vol.size > 0 else np.array([]),
             }
             return data
         except IndexError:
             return { "error": f"Iteration {iteration_index} out of bounds." }
+        except Exception as e:
+            print(e)
+            return { "error": "Unknown error." }
 
 def load_parameter_sweep(
     base_folder: str or Path, 
@@ -312,6 +594,7 @@ def load_parameter_sweep(
     varying_param_name: str, 
     varying_param_values: List[Any], 
     load_mode: str = 'last', 
+    build_name: Callable = _build_run_name,
     **kwargs
 ) -> List[ChelioRun]:
     """
@@ -326,7 +609,7 @@ def load_parameter_sweep(
         current_params[varying_param_name] = value
         current_params.update(kwargs)
         
-        run_name = _build_run_name(current_params)
+        run_name = build_name(current_params)
         run = ChelioRun(base_folder, run_name, load_mode=load_mode)
         run.read_data()
         runs.append(run)
@@ -342,6 +625,7 @@ def load_parameter_matrix(
     what_to_extract: str,
     load_mode: str = 'last',
     mol_type: str = 'mol',
+    build_name: Callable = _build_run_name,
     **kwargs
 ) -> np.ndarray:
     """
@@ -372,7 +656,7 @@ def load_parameter_matrix(
             current_params[param2_name] = p2_val
             current_params.update(kwargs)
 
-            run_name = _build_run_name(current_params)
+            run_name = build_name(current_params)
             run = ChelioRun(base_folder, run_name, load_mode=load_mode)
             run.read_data()
             run.convert_to_vmr()

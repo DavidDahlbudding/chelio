@@ -20,7 +20,7 @@ planet type =                                         rocky                     
 
 === === GRID === ===
 
-TOA pressure [10^-6 bar] =                            1e-1                            [number > 0]                                 (CL: Y)
+TOA pressure [10^-6 bar] =                            1e0                             [number > 0]                                 (CL: Y)
 BOA pressure [10^-6 bar] =                            1e7                             [number > 0]                                 (CL: Y)
 
 === === ITERATION === ===
@@ -55,7 +55,7 @@ opacity mixing =                                      on-the-fly                
 === === CONVECTIVE ADJUSTMENT === ===
 
 convective adjustment =                               yes                             [yes, no]                                    (CL: Y)
-kappa value =                                         0.285714                        [file, number > 0]                           (CL: Y) 
+kappa value =                                         file                            [file, number > 0]                           (CL: Y) 
   file --> kappa file path =                          ./input/delad_example.dat       [file path]                                  (CL: Y)
 
 === === STELLAR AND PLANETARY PARAMETERS === ===
@@ -112,8 +112,8 @@ energy budget correction =                       automatic                  [aut
 convective damping parameter =                   4.0                        [automatic, number > 0]                                        (CL: Y)
 plancktable dimension and stepsize =             8000          2            [two numbers > 0]                                              (CL: N)
 maximum number of iterations =                   30000                      [number > 0]                                                   (CL: Y)
-radiative equilibrium criterion =                1e-6                       [number > 0]                                                   (CL: Y)
-relax radiative criterion at =                   1e4   2e4                  [two numbers > 0]                                              (CL: N)
+radiative equilibrium criterion =                1e-8                       [number > 0]                                                   (CL: Y)
+relax radiative criterion at =                   9e3   1.2e4                [two numbers > 0]                                              (CL: N)
 number of prerun timesteps =                     0                          [number >= 0]                                                  (CL: Y)
 physical timestep [s] =                          no                         [no, number > 0]                                               (CL: Y)
   number --> runtime limit [s] =                 86400                      [number > timestep]                                            (CL: Y)
@@ -121,5 +121,5 @@ physical timestep [s] =                          no                         [no,
 include additional heating =                     no                         [yes, no]                                                      (CL: Y)
   yes --> path to heating file =                 ./input/heating_file.txt   [file path]                                                    (CL: Y)
   yes --> heating file format =                  1 Pressure cgs Heating 1e7 [#skip, press.col., press.unit[cgs,Pa,bar], data, cgs factor]  (CL: N)
-coupling --> write TP profile during run =       0                          [0 (=no), number > 0]                                                (CL: Y)
+coupling --> write TP profile during run =       0                          [0 (=no), number > 0]                                          (CL: Y)
 coupling --> convergence criterion =             1e-3                       [number > 0]                                                   (CL: Y) 

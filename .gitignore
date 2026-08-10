@@ -11,10 +11,14 @@
 /analyze/analyze_habitability.ipynb
 /analyze/contributions+opacities.ipynb
 /analyze/opacity_contributions.ipynb
-/analyze/test_atmospheric_escape.ipynb
-/analyze/test_redoxState.ipynb
+/analyze/contributions+opacities_CIAs.ipynb
+/analyze/plot_phase-diagram.ipynb
+
+/tests
+/chelio_sim/test_*
 
 *.pyc
 
 nohup.out
 .filestructure
+test_*

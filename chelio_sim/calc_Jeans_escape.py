@@ -1,4 +1,6 @@
-# calc_escape.py
+# calc_Jeans_escape.py
+# old calc_escape.py
+
 import argparse
 import os
 import traceback
