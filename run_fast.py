@@ -171,6 +171,11 @@ def main():
     run_output_dir = os.path.join(chelio_path, args.out_dir, args.name)
     os.makedirs(run_output_dir, exist_ok=True)
 
+    # Single kappa/delad table per run, overwritten each iteration
+    delad_table_path = os.path.join(run_output_dir, "delad_chelio.dat")
+
+    t_min_max = [np.inf, 0.0] # initialize global min/max temperature for delad table generation
+
     # 4. SETUP LOGGING
     log = setup_logging(run_output_dir, config["logging"])
     log.info(f"--- Starting Chelio Simulation: {args.name} ---")
@@ -324,7 +329,7 @@ def main():
             
             # Create initial mixfile with constant mixing ratios
             initial_mixfile = os.path.join(run_output_dir, "vertical_mix_initial.dat")
-            mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile)
+            t_min_max = mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile, t_min_max, delad_table_path=delad_table_path)
         
         # --- Initialize Opacity Calculator ---
         # This is a placeholder for getting the species list dynamically
@@ -359,16 +364,16 @@ def main():
                 # Convert GGchem output to HELIOS mixfile
                 ggchem_output = os.path.join(ggchem_path, "Static_Conc.dat")
                 shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i}.dat"))
-                mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile)
+                t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, delad_table_path=delad_table_path)
             
             elif chemistry_mode == "constant":
                 # Create mixfile with constant mixing ratios for current T-P profile
                 if i == i_min:
                     # First iteration: use initial P-T profile
-                    mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, helios_mixfile)
+                    t_min_max = mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, helios_mixfile, t_min_max, delad_table_path=delad_table_path)
                 else:
                     # Subsequent iterations: use the updated T-P profile from previous iteration
-                    mixfile_utils.create_constant_mixfile(p_grid, new_T_profile, constant_mixing_ratios, helios_mixfile)
+                    t_min_max = mixfile_utils.create_constant_mixfile(p_grid, new_T_profile, constant_mixing_ratios, helios_mixfile, t_min_max, delad_table_path=delad_table_path)
 
             # --- Fast T-P Calculation ---
             p_grid, mu_profile, species, mix_ratios = parse_mixfile(helios_mixfile)
@@ -473,7 +478,7 @@ def main():
         
         if chemistry_mode == "ggchem":
             shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
-            mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile)
+            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile, t_min_max, delad_table_path=delad_table_path)
             # remove database.dat in ggchem_path
             try:
                 os.remove(os.path.join(ggchem_path, "database.dat"))
@@ -481,7 +486,7 @@ def main():
                 pass
         elif chemistry_mode == "constant":
             # Create final mixfile with converged T-P profile
-            mixfile_utils.create_constant_mixfile(p_grid, new_T_profile, constant_mixing_ratios, final_mixfile)
+            t_min_max = mixfile_utils.create_constant_mixfile(p_grid, new_T_profile, constant_mixing_ratios, final_mixfile, t_min_max, delad_table_path=delad_table_path)
 
         log.info(f"Simulation '{args.name}' completed.")
 
