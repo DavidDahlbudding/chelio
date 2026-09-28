@@ -16,7 +16,6 @@ import itertools
 import subprocess
 import os
 import shutil
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
 # --- Configuration ---
@@ -137,7 +136,7 @@ def run_single_simulation(params):
         return sim_name, False, error_message
 
 
-def run_simulations_for_cia_source(cia_source_filename, cia_source_name, trace_gas, base_out_dir, n_jobs):
+def run_simulations_for_cia_source(cia_source_filename, cia_source_name, trace_gas, base_out_dir):
     tasks = [
         (trace_gas, pct, cia_source_name, base_out_dir)
         for pct in TRACE_GAS_PCTS
@@ -150,17 +149,15 @@ def run_simulations_for_cia_source(cia_source_filename, cia_source_name, trace_g
     completed_count = 0
     failed_runs = []
 
-    with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-        futures = {executor.submit(run_single_simulation, task): task for task in tasks}
-        for future in tqdm(as_completed(futures), total=total, desc=f"{cia_source_name}"):
-            sim_name, success, message = future.result()
-            completed_count += 1
-            if success:
-                print(f"  ({completed_count}/{total}) COMPLETED: {sim_name}")
-            else:
-                print(f"  ({completed_count}/{total}) FAILED: {sim_name}")
-                print(message)
-                failed_runs.append(sim_name)
+    for task in tqdm(tasks, total=total, desc=f"{cia_source_name}"):
+        sim_name, success, message = run_single_simulation(task)
+        completed_count += 1
+        if success:
+            print(f"  ({completed_count}/{total}) COMPLETED: {sim_name}")
+        else:
+            print(f"  ({completed_count}/{total}) FAILED: {sim_name}")
+            print(message)
+            failed_runs.append(sim_name)
 
     return failed_runs
 
@@ -169,12 +166,6 @@ def run_simulations_for_cia_source(cia_source_filename, cia_source_name, trace_g
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run Early Mars CIA grid (CO2 background, H2O @ 80% RH, trace H2 or CH4)."
-    )
-    parser.add_argument(
-        "-j", "--jobs",
-        type=int,
-        default=1,
-        help="Number of simulations to run in parallel."
     )
     parser.add_argument(
         "--gases",
@@ -208,7 +199,6 @@ if __name__ == "__main__":
     print(f"Psurf: {PSURF:.2e} dyn/cm² (2 bar)")
     print(f"H2O relative humidity: {RELATIVE_HUMIDITY}")
     print(f"Total simulations: {total_sims}")
-    print(f"Parallel jobs: {args.jobs}")
     print(f"Output directory: {base_out_dir}")
     print()
 
@@ -228,7 +218,7 @@ if __name__ == "__main__":
                 copy_cia_to_r50(source_filename, pair)
 
                 failed = run_simulations_for_cia_source(
-                    source_filename, source_name, gas, base_out_dir, args.jobs
+                    source_filename, source_name, gas, base_out_dir
                 )
                 all_failed_runs.extend(failed)
 

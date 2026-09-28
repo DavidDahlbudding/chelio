@@ -465,7 +465,7 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["GGCHEM_PATH"],
     return missing_data
 
 
-def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_min_max, relative_humidity=1.0, coupling_speed_up=False):
+def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_min_max, relative_humidity=1.0, coupling_speed_up=False, delad_table_path=DEFAULT_DELAD_TABLE_PATH):
     """
     Creates a HELIOS mixfile with constant mixing ratios, limited by condensation.
 
@@ -477,6 +477,7 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_mi
         helios_mixfile_path (str): Output path
         relative_humidity (float): Fractional relative humidity applied to H2O saturation cap
                                    (e.g., 0.8 means H2O VMR <= 0.8 * p_sat(T)/P). Default: 1.0.
+        delad_table_path (str): Path of the kappa/delad table (overwritten on every call).
     """
     log.info(f"Creating constant-VMR mixfile at '{helios_mixfile_path}'")
     
@@ -592,18 +593,18 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_mi
             log.warning(f"Filename '{helios_mixfile_path}' does not contain '_' for speed-up. Generating new mixfile.")
 
     # Generate pre-tabulated kappa/delad + c_p table for HELIOS convection.
-    # Written to a shared location and overwritten each iteration.
+    # Overwritten each iteration.
     t_min_max_profile = (T_k.min(), T_k.max())
     t_min = np.min([t_min_max[0], t_min_max_profile[0]])
     t_max = np.max([t_min_max[1], t_min_max_profile[1]])
     t_min_max = (t_min, t_max)
-    
+
     write_helios_delad_table(
         p_bar=p_bar,
         t_min_max=t_min_max,
         species=species_list,
         vmr_profile=vmr,
-        out_path=DEFAULT_DELAD_TABLE_PATH,
+        out_path=delad_table_path,
     )
     
     # Format header nicely (same as convert_ggchem_to_helios)
@@ -631,7 +632,7 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_mi
         raise
 
 
-def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in"), coupling_speed_up=False):
+def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in"), coupling_speed_up=False, delad_table_path=DEFAULT_DELAD_TABLE_PATH):
     """
     Converts GGchem output (Static_Conc.dat) to a HELIOS mixfile.
 
@@ -641,6 +642,7 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max,
         t_min_max (tuple): Tuple containing the minimum and maximum temperatures for the delad table.
         ref_pt (str): Path to the reference profile file.
         coupling_speed_up (bool): Whether to use speed-up coupling with previous mixfile.
+        delad_table_path (str): Path of the kappa/delad table (overwritten on every call).
     """
     log.info(
         f"Converting GGchem output '{ggchem_output_path}' to HELIOS mixfile '{helios_mixfile_path}'"
@@ -776,7 +778,7 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max,
             log.warning(f"Filename '{helios_mixfile_path}' does not contain '_' for speed-up. Generating new mixfile.")
 
     # Generate pre-tabulated kappa/delad + c_p table for HELIOS convection.
-    # Written to a shared location and overwritten each iteration.
+    # Overwritten each iteration.
     t_min_max_profile = (new_data[:, 1].min(), new_data[:, 1].max())
     t_min = np.min([t_min_max[0], t_min_max_profile[0]])
     t_max = np.max([t_min_max[1], t_min_max_profile[1]])
@@ -787,7 +789,7 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max,
         t_min_max=t_min_max,
         species=[str(s) for s in new_header[5:]],
         vmr_profile=new_data[:, 5:],
-        out_path=DEFAULT_DELAD_TABLE_PATH,
+        out_path=delad_table_path,
     )
 
     # nicely format header

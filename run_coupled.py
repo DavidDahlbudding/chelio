@@ -184,6 +184,9 @@ def main():
     run_output_dir_outgassed = os.path.join(chelio_path, args.out_dir, f"{args.name}_outgassed")
     os.makedirs(run_output_dir, exist_ok=True)
 
+    # Single kappa/delad table per run, overwritten each iteration and read by HELIOS
+    delad_table_path = os.path.join(run_output_dir, "delad_chelio.dat")
+
     # Extract iteration parameters
     i_min = config["coupling"]["i_min"]
     i_max = config["coupling"]["i_max"]
@@ -326,7 +329,7 @@ def main():
 
                         try:
                             nlayer = len(P_bar)
-                            output_file = os.path.join(chelio_path, "../ggchem_inputs/pt_helios.in")
+                            output_file = os.path.join(chelio_path, "ggchem_inputs", "pt_helios.in")
                             with open(output_file, "w") as f:
                                 f.write("# P [bar], T [K]\n")
                                 for i in range(nlayer):
@@ -429,7 +432,7 @@ def main():
 
                 # Create initial mixfile with constant mixing ratios
                 initial_mixfile = os.path.join(run_output_dir, "vertical_mix_initial.dat")
-                t_min_max = mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile, t_min_max, relative_humidity=relative_humidity)
+                t_min_max = mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile, t_min_max, relative_humidity=relative_humidity, delad_table_path=delad_table_path)
             else:
                 try:
                     # copy f"{args.name}_tp_coupling_{i_min-1}.dat" to ggchem_inputs/pt_helios.in for the initial run
@@ -456,15 +459,10 @@ def main():
             # Convert GGchem output to HELIOS mixfile
             ggchem_output = os.path.join(ggchem_path, "Static_Conc.dat")
             shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i_min}.dat"))
-            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, coupling_speed_up=(coupling_speed_up=="yes"))
+            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
         elif chemistry_mode == "constant":
             # Create mixfile with constant mixing ratios
-            t_min_max = mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, helios_mixfile, t_min_max, relative_humidity=relative_humidity, coupling_speed_up=(coupling_speed_up=="yes"))
-        
-        # copy delad table to run_output_dir and append iteration number to the filename
-        delad_table_name = os.path.basename(mixfile_utils.DEFAULT_DELAD_TABLE_PATH)
-        delad_table_output = os.path.join(run_output_dir, f"{delad_table_name[:-4]}_{i_min}.dat")
-        shutil.copy(mixfile_utils.DEFAULT_DELAD_TABLE_PATH, delad_table_output)
+            t_min_max = mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, helios_mixfile, t_min_max, relative_humidity=relative_humidity, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
 
         for i in range(i_min, i_max + 1):
             log.info(f"--- Coupling Iteration: {i} ---")
@@ -510,7 +508,7 @@ def main():
                 "file_with_vertical_mixing_ratios": helios_mixfile,
                 "path_to_temperature_file": os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i-1}.dat"),
                 "kappa_value": "file",
-                "kappa_file_path": mixfile_utils.DEFAULT_DELAD_TABLE_PATH,
+                "kappa_file_path": delad_table_path,
                 "coupling_mode": "yes",
                 "coupling_iteration_step": i,
                 "coupling_speed_up": coupling_speed_up,
@@ -551,24 +549,20 @@ def main():
                 
                 # Convert GGchem output to HELIOS mixfile
                 shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
-                t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, coupling_speed_up=(coupling_speed_up=="yes"))
+                t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
             
             elif chemistry_mode == "constant":
                 # Read the new T-P profile and create updated mixfile with condensation
                 P_bar_new = tp_data[:, 0]
                 T_k_new = tp_data[:, 1]
-                t_min_max = mixfile_utils.create_constant_mixfile(P_bar_new, T_k_new, constant_mixing_ratios, helios_mixfile, t_min_max, relative_humidity=relative_humidity, coupling_speed_up=(coupling_speed_up=="yes"))
-
-            # copy delad table to run_output_dir and append iteration number to the filename
-            delad_table_output = os.path.join(run_output_dir, f"{delad_table_name[:-4]}_{i+1}.dat")
-            shutil.copy(mixfile_utils.DEFAULT_DELAD_TABLE_PATH, delad_table_output)
+                t_min_max = mixfile_utils.create_constant_mixfile(P_bar_new, T_k_new, constant_mixing_ratios, helios_mixfile, t_min_max, relative_humidity=relative_humidity, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
 
         log.info(f"--- Finalizing Simulation ---")
         # Final conversion/creation of mixfile
         final_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i+1}.dat")
         
         if chemistry_mode == "ggchem":
-            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile, t_min_max, coupling_speed_up=(coupling_speed_up=="yes"))
+            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile, t_min_max, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
             shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
             # remove database.dat in ggchem_path
             try:
@@ -581,7 +575,7 @@ def main():
             tp_data = np.loadtxt(final_tp, skiprows=1)
             P_bar_final = tp_data[:, 0]
             T_k_final = tp_data[:, 1]
-            t_min_max = mixfile_utils.create_constant_mixfile(P_bar_final, T_k_final, constant_mixing_ratios, final_mixfile, t_min_max, relative_humidity=relative_humidity, coupling_speed_up=(coupling_speed_up=="yes"))
+            t_min_max = mixfile_utils.create_constant_mixfile(P_bar_final, T_k_final, constant_mixing_ratios, final_mixfile, t_min_max, relative_humidity=relative_humidity, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
 
         log.info(f"Simulation '{args.name}' completed.")
 

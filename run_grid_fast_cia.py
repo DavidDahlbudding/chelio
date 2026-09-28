@@ -14,7 +14,6 @@ import os
 import shutil
 import glob
 import re
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from chelio_sim.mixfile_utils import mol_dict # for triple and critical point data
 
@@ -251,7 +250,7 @@ def run_single_simulation(params):
         return sim_name, False, error_message
 
 
-def run_simulations_for_cia_source(cia_source_filename, cia_pair, temps, psurfs, base_out_dir, n_jobs):
+def run_simulations_for_cia_source(cia_source_filename, cia_pair, temps, psurfs, base_out_dir):
     """
     Run all simulations for a single CIA source file.
     """
@@ -270,18 +269,15 @@ def run_simulations_for_cia_source(cia_source_filename, cia_pair, temps, psurfs,
     completed_count = 0
     failed_runs = []
     
-    with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-        futures = {executor.submit(run_single_simulation, task): task for task in tasks}
-        
-        for future in tqdm(as_completed(futures), total=total_sims, desc=f"CIA: {cia_source}"):
-            sim_name, success, message = future.result()
-            completed_count += 1
-            if success:
-                print(f"  ({completed_count}/{total_sims}) COMPLETED: {sim_name}")
-            else:
-                print(f"  ({completed_count}/{total_sims}) FAILED: {sim_name}")
-                print(message)
-                failed_runs.append(sim_name)
+    for task in tqdm(tasks, total=total_sims, desc=f"CIA: {cia_source}"):
+        sim_name, success, message = run_single_simulation(task)
+        completed_count += 1
+        if success:
+            print(f"  ({completed_count}/{total_sims}) COMPLETED: {sim_name}")
+        else:
+            print(f"  ({completed_count}/{total_sims}) FAILED: {sim_name}")
+            print(message)
+            failed_runs.append(sim_name)
     
     return failed_runs
 
@@ -309,12 +305,6 @@ def discover_cia_sources():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run a grid of Chelio simulations testing different CIA opacity sources."
-    )
-    parser.add_argument(
-        "-j", "--jobs",
-        type=int,
-        default=1,
-        help="Number of simulations to run in parallel."
     )
     parser.add_argument(
         "--pairs",
@@ -400,7 +390,6 @@ if __name__ == "__main__":
     print(f"Total CIA sources: {total_sources}")
     print(f"Simulations per source: {total_sims_per_source}")
     print(f"Total simulations: {total_sims}")
-    print(f"Parallel jobs: {args.jobs}")
     print(f"Output directory: {base_out_dir}")
     print()
 
@@ -433,7 +422,7 @@ if __name__ == "__main__":
             
             # Run all simulations for this source (pass the pair for mixing ratio calculation)
             failed = run_simulations_for_cia_source(
-                source_filename, pair, temps, psurfs_pair, base_out_dir, args.jobs
+                source_filename, pair, temps, psurfs_pair, base_out_dir
             )
             all_failed_runs.extend(failed)
             

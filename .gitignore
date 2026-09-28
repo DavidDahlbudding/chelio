@@ -19,6 +19,7 @@
 
 *.pyc
 
+CLAUDE.md
 nohup.out
 .filestructure
 test_*
