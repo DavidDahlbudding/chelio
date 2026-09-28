@@ -12,8 +12,16 @@ paths:
   helios_path: "${HELIOS_PATH}"
 
 simulation_params:
-  outgas_or_manual: "manual" # "outgas" or "manual"
-  with_outgassed: False
+  # --- Run modes (see chelio_sim/run_modes.py) ---
+  # "equilibrium": GGchem recomputes the composition every iteration from elemental abundances
+  # "constant": fixed constant_mixing_ratios (below), capped by saturation; no GGchem
+  chemistry: "equilibrium"
+  # Elemental abundances for equilibrium chemistry: "manual" (a_h..a_n, surface_pressure)
+  # or "outgas" (atmodeller, sets the surface pressure itself). Ignored by constant chemistry.
+  outgas_or_manual: "manual"
+  # Extra HELIOS run with the outgassed composition held fixed (no GGchem), in <out_dir>/<name>_outgassed/.
+  # Needs outgas_or_manual "outgas". "none", "also" (before the coupled run) or "only" (skip the coupled run)
+  uncoupled_outgassed_run: "none"
   toa_pressure: 1.0e0
   internal_temp: 100
   surface_albedo: 0.1
@@ -34,8 +42,7 @@ simulation_params:
   a_c: 0.00371 # C abundance
   a_o: 0.00629 # O abundance
   a_n: 0.0001 # N abundance
-  # No Eq Chem
-  chemistry_mode: "ggchem" # "constant" or "ggchem"
+  # Constant chemistry specific parameters
   constant_mixing_ratios:
     N2: 0.00
     CH4: 0.01
@@ -47,7 +54,6 @@ planet_params:
   g: 981 # cm/s^2
 
 coupling:
-  with_ggchem: True
   i_min: 0 # Starting coupling iteration
   i_max: 10 # Maximum coupling iterations
   i_full_convergence: 4 # Iteration to switch to full convergence

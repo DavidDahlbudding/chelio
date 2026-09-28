@@ -61,7 +61,7 @@ DEFAULT_DELAD_TABLE_PATH = os.path.abspath(
 _CP_INTERP_CACHE = {}
 
 # Species for which p_sat() returns a valid physical formula.
-# He returns NaN (fine); unknown species return np.empty_like (uninitialized garbage - latent bug).
+# He and unknown species return NaN (no condensation limit).
 # Using an allowlist avoids calling p_sat for non-condensing or unknown species.
 _PSAT_FORMULA_SPECIES = frozenset(['H2', 'N2', 'CH4', 'O2', 'CO2', 'H2O', 'NH3', 'CO'])
 
@@ -397,7 +397,7 @@ def p_sat(T, species, mask=False):
     else:
         # warning
         log.warning(f"Saturation pressure for species {species} not found. Returning NaN.")
-        return np.empty_like(T)
+        return np.full_like(T, np.nan, dtype=float)
 
 
 def append_profiles(header, data, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in")):

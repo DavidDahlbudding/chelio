@@ -226,7 +226,7 @@ def run_single_simulation(params):
         "--out_dir", base_out_dir,
         "--internal_temp", str(temp),
         "--surface_pressure", str(psurf),
-        "--chemistry_mode", "constant",
+        "--chemistry", "constant",
         "--constant_mixing_ratios", mixing_ratios_str,
         "--outgas_or_manual", "manual",
         "--init_pt_file", init_pt_path if init_pt_path else "None",

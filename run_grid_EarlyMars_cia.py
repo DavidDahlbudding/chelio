@@ -109,7 +109,7 @@ def run_single_simulation(params):
         "--name", sim_name,
         "--out_dir", base_out_dir,
         "--surface_pressure", str(PSURF),
-        "--chemistry_mode", "constant",
+        "--chemistry", "constant",
         "--constant_mixing_ratios", mixing_ratios_str,
         "--relative_humidity", str(RELATIVE_HUMIDITY),
         "--outgas_or_manual", "manual",

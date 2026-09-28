@@ -14,7 +14,7 @@ Chelio is an orchestrator: it writes input files, calls HELIOS and GGchem as ext
 2. **Coupling loop**: the composition is converted to a HELIOS mixing-ratio file (with condensation limits and an adiabatic-gradient table). HELIOS computes a new radiative-convective T-P profile, and GGchem re-equilibrates the chemistry on it.
 3. The loop repeats until HELIOS reports convergence or `i_max` is reached.
 
-Alternatively, `--chemistry_mode constant` skips GGchem and uses fixed volume mixing ratios, capped by the saturation vapour pressure. This mode is used for the CIA studies.
+Alternatively, `--chemistry constant` skips GGchem and uses fixed volume mixing ratios, capped by the saturation vapour pressure. This mode is used for the CIA studies.
 
 ---
 
@@ -67,10 +67,22 @@ python3 run_coupled.py --name "HotPlanetRun" --internal_temp 300
 ```
 Every numeric key in `simulation_params` (e.g. `--surface_pressure`, `--a_c`, `--surface_albedo`) can be overridden this way. Iteration settings (`i_min`, `i_max`, `i_full_convergence`, HELIOS iteration limits) live in the `coupling` section of `config.yaml`.
 
+### Run Modes
+
+Three switches in `simulation_params` (each also a CLI flag) select what a run does:
+
+| Setting | Values | Meaning |
+|---|---|---|
+| `chemistry` | `equilibrium` (default), `constant` | GGchem equilibrium chemistry, or fixed `constant_mixing_ratios` capped by saturation (no GGchem). |
+| `outgas_or_manual` | `manual` (default), `outgas` | Source of the elemental abundances for equilibrium chemistry: `a_h`…`a_n` + `surface_pressure`, or atmodeller outgassing (which also sets the surface pressure). |
+| `uncoupled_outgassed_run` | `none` (default), `also`, `only` | Extra HELIOS run with the outgassed composition held fixed (no GGchem), written to `output/<name>_outgassed/`; `also` runs it before the coupled run, `only` instead of it. |
+
+Settings that the chosen combination ignores produce a warning at the start of `run.log`, e.g. outgassing parameters with `constant` chemistry, `uncoupled_outgassed_run also` without `outgas`, or `--constant_mixing_ratios` / `--relative_humidity` with `equilibrium` chemistry. `--relative_humidity` only scales the H₂O saturation cap, so it also warns when H₂O is not in the mixture. The run stops with an explanation only if nothing sensible can be run, e.g. `uncoupled_outgassed_run only` without `outgas`, or missing or invalid `constant_mixing_ratios`.
+
 ### Constant Chemistry Mode
 
 ```bash
-python3 run_coupled.py --name "N2CH4" --chemistry_mode constant \
+python3 run_coupled.py --name "N2CH4" --chemistry constant \
     --constant_mixing_ratios "N2=0.5,CH4=0.5,CO2=0,H2=0,H2O=0" \
     --surface_pressure 1e7 --relative_humidity 0.8
 ```
