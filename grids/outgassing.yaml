@@ -1,0 +1,17 @@
+# Outgassed atmospheres (atmodeller magma ocean; it also sets the surface pressure), equilibrium chemistry
+# (formerly run_grid_atmodeller.py, which only passed internal_temp). 4 x 2 x 3 x 3 x 3 x 3 = 648 runs.
+runner: coupled
+out_dir: output/outgassing
+name: "Earth_Tint={internal_temp}_Tmelt={melt_temp}_Hocean={h_ocean}_CtoH={ctoh_ratio}_NtoC={ntoc_ratio}_fO2={fO2}"
+
+fixed:
+  outgas_or_manual: outgas
+  uncoupled_outgassed_run: none   # "also": additionally run HELIOS with the outgassed composition held fixed
+
+grid:
+  internal_temp: [50, 100, 150, 200]   # K
+  melt_temp: [1000, 2000]              # K
+  h_ocean: [0.1, 1.0, 10.0]            # Earth oceans
+  ctoh_ratio: [0.1, 1.0, 10.0]         # C/H mass ratio
+  ntoc_ratio: [0.01, 0.1, 1.0]         # N/C mass ratio
+  fO2: [-3, 0, 3]                      # delta IW

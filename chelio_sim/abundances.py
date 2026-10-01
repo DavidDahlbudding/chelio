@@ -52,8 +52,9 @@ def calculate_abundances_atmodeller(
     Calculates atmospheric abundances using atmodeller based on interior-atmosphere exchange.
 
     This function sets up a planet, defines chemical species, and solves for the
-    resulting atmospheric composition given various constraints. The results are
-    then formatted for use in either GGchem or HELIOS.
+    resulting atmospheric composition given various constraints. The elemental
+    abundances are written for GGchem (output_dir "ggchem") and the surface pressure to
+    helios_inputs/P_BOA.dat. Returns the outgassed gas species and their VMRs.
     """
     log.info(f"Calculating abundances for '{output_dir}' output...")
 
@@ -161,12 +162,7 @@ def calculate_abundances_atmodeller(
                 log.debug(f"{e} {x_e:.5f}")
                 f.write(f"{e} {x_e:.5f}\n")
 
-    # --- Write HELIOS species and P_BOA files ---
-    # These files are needed by both GGchem and HELIOS workflows.
-
-    all_helios_species_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../helios_inputs/all_species.dat")
-    )
+    # --- Outgassed gas species (for the HELIOS species file) and P_BOA ---
     translate_dict = {"H3N": "NH3", "O2S": "SO2", "OS": "SO"}
     outgassed_species_vmrs = {}
     for key in output_dict.keys():
@@ -177,38 +173,6 @@ def calculate_abundances_atmodeller(
                 translate_dict.get(species_name, species_name)
             ] = vmr
 
-    species_output_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../helios_inputs/species.dat")
-    )
-    with open(species_output_path, "w") as f_out, open(
-        all_helios_species_path, "r"
-    ) as f_all:
-        for i, line in enumerate(f_all):
-            line = line.strip()
-            if i == 0:
-                log.debug(line)
-                f_out.write(line + "\n\n")
-            elif line:
-                parts = line.split()
-                species_name = parts[0]
-                is_cia = species_name.startswith("CIA")
-
-                if is_cia:
-                    pair = species_lib[species_name].fc_name.replace("1", "").split("&")
-                    if pair[0] in outgassed_species_vmrs and pair[1] in outgassed_species_vmrs:
-                        if output_dir == "helios":
-                            vmr_line = f"{outgassed_species_vmrs[pair[0]]:.5e}&{outgassed_species_vmrs[pair[1]]:.5e}"
-                            line = line.replace("file", vmr_line)
-                        f_out.write(line + "\n\n")
-                        log.debug(line)
-                elif species_name in outgassed_species_vmrs:
-                    if output_dir == "helios":
-                        line = line.replace(
-                            "file", f"{outgassed_species_vmrs[species_name]:.5e}"
-                        )
-                    f_out.write(line + "\n\n")
-                    log.debug(line)
-
     p_boa_path = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "../helios_inputs/P_BOA.dat")
     )
@@ -217,6 +181,8 @@ def calculate_abundances_atmodeller(
         boa_p = output_dict["atmosphere"]["pressure"][0] * 1e6
         f.write(f"{boa_p:.5e}")
     log.info(f"Wrote P_BOA = {boa_p:.5e} dyn/cm^2 to {p_boa_path}")
+
+    return outgassed_species_vmrs
 
 
 def calculate_abundances_manual(

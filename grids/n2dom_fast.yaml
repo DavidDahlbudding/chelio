@@ -1,0 +1,17 @@
+# N2-dominated atmospheres with the fast grey RT (run_fast.py) instead of HELIOS
+# (formerly run_grid_fast.py). Only a_C is varied here: 3 x 3 x 5 = 45 runs.
+runner: fast
+out_dir: output/N2dom_fast
+name: "Earth_Tint={internal_temp}K_Psurf={psurf_bar}bar_aH={a_h}_aC={a_c}_aO={a_o}_aN={a_n}"
+
+fixed:
+  chemistry: equilibrium
+  outgas_or_manual: manual
+
+grid:
+  internal_temp: [150, 200, 250]            # K
+  surface_pressure: [1.0e8, 1.0e7, 1.0e6]   # dyn/cm^2
+  a_h: [1.0]                                # full range: [1.0e-6, 1.0e-2, 1.0e-1, 1.0, 3.0]
+  a_c: [1.0e-6, 1.0e-2, 1.0e-1, 2.5e-1, 5.0e-1]
+  a_o: [1.0e-2]                             # full range: [1.0e-6, 1.0e-2, 1.0e-1, 5.0e-1, 1.0]
+  a_n: [1.0]

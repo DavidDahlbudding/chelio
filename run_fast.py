@@ -12,6 +12,7 @@ from scipy.interpolate import interp1d
 
 # Import the refactored modules
 from chelio_sim import abundances, external_runners, init_pt, mixfile_utils, rt_utils, run_modes
+from chelio_sim import species as species_utils
 from chelio_sim.rt_utils import OpacityCalculator, calculate_tp_profile, parse_mixfile
 
 
@@ -90,26 +91,7 @@ def main():
     )
 
     # Add overrides for key simulation parameters
-    sim_params = [
-        "toa_pressure",
-        "internal_temp",
-        "surface_albedo",
-        "melt_temp",
-        "melt_frac",
-        "h_ocean",
-        "ctoh_ratio",
-        "ntoc_ratio",
-        "fO2",
-        "stoc_ratio",
-        "cltoc_ratio",
-        "min_boa_pressure",
-        "max_boa_pressure",
-        "surface_pressure",
-        "a_h",
-        "a_c",
-        "a_o",
-        "a_n"
-    ]
+    sim_params = run_modes.SIM_PARAMS
     for param in sim_params:
         parser.add_argument(f"--{param}", type=float, help=f"Override {param} from config.")
     args = parser.parse_args()
@@ -172,7 +154,7 @@ def main():
     if uncoupled_outgassed_run == "only" and os.path.exists(outgassed_tp_file):
         print(f"Error: The uncoupled outgassed run '{args.name}_outgassed' already exists in {run_output_dir_outgassed}.")
         print("       Please choose a different name or remove the existing run.")
-        sys.exit(1)
+        sys.exit(run_modes.EXIT_ALREADY_DONE)
 
     log = setup_logging(log_dir, config["logging"])
     log.info(f"--- Starting Chelio Simulation: {args.name} ---")
@@ -192,7 +174,7 @@ def main():
 
             os.makedirs(run_output_dir_outgassed, exist_ok=True)
 
-            abundances.calculate_abundances_atmodeller(
+            outgassed_vmrs = abundances.calculate_abundances_atmodeller(
                 output_dir="helios",
                 melt_frac=sim_p["melt_frac"],
                 T_surf=sim_p["melt_temp"],
@@ -203,7 +185,7 @@ def main():
                 StoC=sim_p.get("stoc_ratio"),
                 CltoC=sim_p.get("cltoc_ratio"),
             )
-            shutil.copy(os.path.join(chelio_path, "helios_inputs", "species.dat"), os.path.join(run_output_dir_outgassed, "species.dat"))
+            _, outgassed_species_file = species_utils.setup_species_file(sim_p, run_output_dir_outgassed, outgassed_vmrs, write_vmrs=True)
             p_boa_path = os.path.join(chelio_path, "helios_inputs", "P_BOA.dat")
             shutil.copy(p_boa_path, os.path.join(run_output_dir_outgassed, "P_BOA.dat"))
 
@@ -227,7 +209,7 @@ def main():
                 "boa_pressure": boa_p,
                 "internal_temperature": sim_p["internal_temp"],
                 "surface_albedo": sim_p["surface_albedo"],
-                "path_to_species_file": os.path.join(chelio_path, "helios_inputs", "species.dat"),
+                "path_to_species_file": outgassed_species_file,
                 "coupling_mode": "no",
                 "coupling_iteration_step": 0,
                 "coupling_speed_up": "no",
@@ -244,10 +226,11 @@ def main():
             return
 
         # --- Initial Setup ---
+        outgassed_vmrs = None  # set if the coupled run takes its composition from atmodeller
         if chemistry == "equilibrium":
             log.info("Initializing GGchem with initial abundances and P-T profile...")
             if sim_p["outgas_or_manual"] == "outgas":
-                abundances.calculate_abundances_atmodeller(
+                outgassed_vmrs = abundances.calculate_abundances_atmodeller(
                     output_dir="ggchem",
                     melt_frac=sim_p["melt_frac"],
                     T_surf=sim_p["melt_temp"],
@@ -271,7 +254,6 @@ def main():
 
                 log.info(f"P_BOA ({boa_p}) is within the range of {min_boa_pressure} to {max_boa_pressure} dyn/cm^2.")
                 
-                shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'species.dat'), run_output_dir)
                 shutil.copy(p_boa_path, os.path.join(run_output_dir, "P_BOA.dat"))
             else:
                 abundances.calculate_abundances_manual(
@@ -320,9 +302,9 @@ def main():
             t_min_max = mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, initial_mixfile, t_min_max, delad_table_path=delad_table_path)
         
         # --- Initialize Opacity Calculator ---
-        # This is a placeholder for getting the species list dynamically
-        # For now, we hardcode the species we expect to have opacities for.
-        species_for_opacity = rt_utils.read_species_file(os.path.join(chelio_path, 'helios_inputs', 'species.dat'))
+        active_species, species_file = species_utils.setup_species_file(sim_p, run_output_dir, outgassed_vmrs)
+
+        species_for_opacity = rt_utils.read_species_file(species_file)
         opacity_files = {s: os.path.join(helios_path, "input", "opacity", "r50_kdistr", f"{s}_opac_ip_kdistr.h5") for s in species_for_opacity}
         
         # Check if all opacity files exist
@@ -352,7 +334,7 @@ def main():
                 # Convert GGchem output to HELIOS mixfile
                 ggchem_output = os.path.join(ggchem_path, "Static_Conc.dat")
                 shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i}.dat"))
-                t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, delad_table_path=delad_table_path)
+                t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, active_species, delad_table_path=delad_table_path)
             
             elif chemistry == "constant":
                 # Create mixfile with constant mixing ratios for current T-P profile
@@ -466,7 +448,7 @@ def main():
         
         if chemistry == "equilibrium":
             shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
-            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile, t_min_max, delad_table_path=delad_table_path)
+            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile, t_min_max, active_species, delad_table_path=delad_table_path)
             # remove database.dat in ggchem_path
             try:
                 os.remove(os.path.join(ggchem_path, "database.dat"))

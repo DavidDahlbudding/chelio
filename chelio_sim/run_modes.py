@@ -20,6 +20,35 @@ CHEMISTRY_MODES = ("equilibrium", "constant")
 ABUNDANCE_SOURCES = ("manual", "outgas")
 UNCOUPLED_OUTGASSED_RUN_MODES = ("none", "also", "only")
 
+# Numeric `simulation_params` that both runners accept as --<param> CLI overrides (also used by run_grid.py)
+SIM_PARAMS = (
+    "toa_pressure",
+    "internal_temp",
+    "surface_albedo",
+    "melt_temp",
+    "melt_frac",
+    "h_ocean",
+    "ctoh_ratio",
+    "ntoc_ratio",
+    "fO2",
+    "stoc_ratio",
+    "cltoc_ratio",
+    "min_boa_pressure",
+    "max_boa_pressure",
+    "surface_pressure",
+    "a_h",
+    "a_c",
+    "a_o",
+    "a_n",
+)
+
+# VMR given to H2O in constant chemistry if constant_mixing_ratios does not list it (too low to matter or to be
+# topped up by create_constant_mixfile; HELIOS always gets H2O as an active species)
+H2O_PLACEHOLDER_VMR = 1e-30
+
+# Exit code of run_coupled.py / run_fast.py when the requested run already exists (run_grid.py reports it as skipped)
+EXIT_ALREADY_DONE = 3
+
 # Old config keys and what replaces them
 RENAMED_KEYS = {
     "chemistry_mode": "`chemistry` ('ggchem' is now 'equilibrium', 'constant' is unchanged)",
@@ -48,6 +77,14 @@ def add_mode_arguments(parser):
         default=None,
         help="Extra HELIOS run with the fixed atmodeller composition (needs outgas_or_manual 'outgas'): "
              "'none', 'also' (before the coupled run) or 'only' (no coupled run). Overrides config.",
+    )
+
+
+    parser.add_argument(
+        "--active_species",
+        default=None,
+        help="Species HELIOS loads opacities for: 'auto' (from the composition) or comma-separated species of "
+             "helios_inputs/all_species.dat, e.g. 'H2O,CO2,CH4,H2'. CIA pairs follow automatically. Overrides config.",
     )
 
 
@@ -84,6 +121,8 @@ def resolve_run_modes(config, args):
                 )
 
     sim_p = config["simulation_params"]
+    if getattr(args, "active_species", None) is not None:
+        sim_p["active_species"] = args.active_species
     defaults = {"chemistry": "equilibrium", "outgas_or_manual": "manual", "uncoupled_outgassed_run": "none"}
     for key, default in defaults.items():
         if getattr(args, key, None) is not None:
@@ -154,6 +193,8 @@ def resolve_run_modes(config, args):
                     "--relative_humidity is ignored: it only scales the H2O saturation cap, "
                     "but H2O is not in constant_mixing_ratios (or is 0)."
                 )
+        # H2O is always an active species (chelio_sim/species.py), so the mixfile needs a column for it
+        mixing_ratios.setdefault("H2O", H2O_PLACEHOLDER_VMR)
         if outgas_or_manual == "outgas":
             used_for = ("they are only used for the uncoupled outgassed run"
                         if uncoupled_outgassed_run == "also" else "they are ignored")

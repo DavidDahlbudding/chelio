@@ -44,7 +44,7 @@ For the two code paths, you can alternatively edit `config.yaml` and replace `${
 
 ## Usage
 
-All scripts must be run from the root directory of the `chelio` repository. Single runs go through `run_coupled.py`, and the `run_grid_*.py` scripts call it repeatedly (see below).
+All scripts must be run from the root directory of the `chelio` repository. Single runs go through `run_coupled.py`, and `run_grid.py` calls it repeatedly for a parameter grid (see below).
 
 Note that pressures in `config.yaml` and on the command line are in **dyn/cm²** (1e6 = 1 bar). The T-P files written to `output/` are in bar.
 
@@ -96,21 +96,38 @@ Each run writes to `output/<name>/`. The main files are:
 * `delad_chelio.dat`: adiabatic-gradient table read by HELIOS. There is a single file, overwritten every iteration.
 * `run.log`, plus the standard HELIOS output files.
 
-`run_coupled.py` refuses to overwrite a finished run. To resume an interrupted run, set `coupling.i_min` in `config.yaml` to the next iteration; the run then restarts from `<name>_tp_coupling_<i_min-1>.dat`. `--init_pt_file` starts a new run from any existing T-P profile.
+`run_coupled.py` refuses to overwrite a finished run. To resume an interrupted run, set `coupling.i_min` in `config.yaml` to the next iteration; the run then restarts from `<name>_tp_coupling_<i_min-1>.dat`. `--init_pt_file` starts a new run from any existing T-P profile, and `--helios_param_file` uses a different HELIOS parameter file than `helios_inputs/param.dat`.
+
+### Active Species
+
+HELIOS only loads the opacities of the *active* species of a run, since reading opacities takes most of its start-up time. `helios_inputs/all_species.dat` is the catalog of available species; the selection is set by `simulation_params.active_species` in `config.yaml` (or `--active_species`, also usable in grid files):
+
+* `auto` (default): for constant chemistry, the species in `constant_mixing_ratios` (with a VMR ≥ 1e-29); for equilibrium chemistry with manual abundances, every catalog species made of elements with abundance > 0 (e.g. no NH₃, HCN, N₂ if `a_n` is 0); for outgassed atmospheres, the species outgassed by atmodeller.
+* a list, e.g. `[H2O, CO2, CH4, H2]` (command line: `--active_species H2O,CO2,CH4,H2`).
+
+CIA pairs are never listed: a pair is included exactly when both collision partners are active. H₂O is always active, because HELIOS needs it; with constant chemistry it gets a VMR of 1e-30 if `constant_mixing_ratios` does not list it. The resulting species file is written to `output/<name>/species.dat`.
 
 ### Running a Parameter Grid Exploration
 
-The grid scripts run many `run_coupled.py` (or `run_fast.py`) calls, one after another. Their parameter lists and output directories are hard-coded at the top of each script's `__main__` block, so edit them there.
+`run_grid.py` runs many `run_coupled.py` (or `run_fast.py`) calls, one after another. The grid is defined in a YAML file in `grids/`: fixed parameters, lists of values to combine, the output directory and the run-name template. See `grids/README.md` for the keys.
 
-| Script | Purpose |
+```bash
+python3 run_grid.py grids/n2dom.yaml --dry-run    # show the runs and their commands
+python3 run_grid.py grids/n2dom.yaml
+python3 run_grid.py grids/cia_comparison.yaml --only cia_pair=N2-CH4
+```
+
+| Grid file | Purpose |
 |---|---|
-| `run_grid_manual.py` | Grid over T_int × P_surf × manual elemental abundances, using `run_coupled.py`. |
-| `run_grid_fast.py` | The same grid using the fast approximate RT (`run_fast.py`). |
-| `run_grid_atmodeller.py` | Grid for outgassed atmospheres. Currently only `--internal_temp` is passed; the outgassing parameters are taken from `config.yaml`. |
-| `run_grid_fast_cia.py` | Loops over one or more CIA pairs and every available CIA opacity source (see 2nd paper). Each source is swapped into HELIOS' `r50_kdistr` in turn, constant-chemistry runs are made, and the defaults are restored afterwards. Options: `--pairs`, `--source`, `--list-sources`, `--restore-defaults`. |
-| `run_grid_EarlyMars_cia.py` | Benchmark against Turbet+ (2020): 2 bar CO₂ with 80 % RH H₂O and trace H₂/CH₄, for different CO₂–H₂ / CO₂–CH₄ CIA sources. It needs `helios_inputs/param_EarlyMars.dat`. |
+| `grids/n2dom.yaml` | T_int × P_surf × manual elemental abundances, using `run_coupled.py`. |
+| `grids/n2dom_fast.yaml` | The same kind of grid using the fast approximate RT (`run_fast.py`). |
+| `grids/outgassing.yaml` | Outgassed atmospheres: T_int × atmodeller parameters (melt temperature, H ocean, C/H, N/C, fO2). |
+| `grids/cia_comparison.yaml` | Every available CIA opacity source (see 2nd paper). Each source is swapped into HELIOS' `r50_kdistr` in turn, constant-chemistry runs are made, and the default is restored afterwards. `python3 run_grid.py --list-cia-sources` / `--restore-cia-defaults` list the sources and restore the defaults. |
+| `grids/early_mars_cia.yaml` | Benchmark against Turbet+ (2020): 2 bar CO₂ with 80 % RH H₂O and trace H₂/CH₄, for different CO₂–H₂ / CO₂–CH₄ CIA sources. It needs `helios_inputs/param_EarlyMars.dat`. |
 
-**Caution:** runs share working files, both in `ggchem_inputs/` and `helios_inputs/` and inside the HELIOS/GGchem installations. Simulations therefore must not run in parallel, and the grid scripts deliberately run them sequentially. This includes starting several `run_coupled.py` processes by hand.
+With `run_coupled.py`, runs that already finished are skipped, so an interrupted grid can simply be started again (an unfinished run restarts from scratch).
+
+**Caution:** runs share working files, both in `ggchem_inputs/` and `helios_inputs/` and inside the HELIOS/GGchem installations. Simulations therefore must not run in parallel, and `run_grid.py` deliberately runs them sequentially. This includes starting several `run_coupled.py` processes by hand.
 
 For a quick ad-hoc sweep, a bash loop works as well:
 
@@ -154,11 +171,8 @@ chelio/
 ├─ requirements.txt
 ├─ run_coupled.py              # Core script: single coupled HELIOS-GGchem (or constant-chemistry) run
 ├─ run_fast.py                 # Same, with approximate fast RT (Rosseland mean opacities) instead of HELIOS
-├─ run_grid_manual.py          # Grid: T_int × P_surf × manual abundances
-├─ run_grid_fast.py            # Same grid using run_fast.py
-├─ run_grid_atmodeller.py      # Grid for outgassed atmospheres
-├─ run_grid_fast_cia.py        # Loop over P-T grid for one or more CIA pairs (see 2nd paper for details)
-├─ run_grid_EarlyMars_cia.py   # Benchmark code against Turbet+ (2020)
+├─ run_grid.py                 # Runs a parameter grid defined in grids/*.yaml
+├─ grids/                      # Grid files (N2dom, outgassing, CIA comparison, Early Mars, ...) + README
 ├─ get_last_ggchem.py          # Compute missing final GGchem output for finished/aborted runs
 ├─ analyze/                    # Analysis notebooks and tools
 │  ├─ 1_IndividualRun.ipynb, 2_…, 3_…, A_…, B_…, C_cornerplots.ipynb
@@ -170,12 +184,14 @@ chelio/
 │  ├─ init_pt.py               # Initial P-T profiles
 │  ├─ mixfile_utils.py         # GGchem → HELIOS mixfile, condensation limits, adiabatic-gradient table
 │  ├─ rt_utils.py              # Approximate fast RT with on-the-fly Rosseland mean calculation*
+│  ├─ species.py               # Active species of a run → HELIOS species file
+│  ├─ grid.py                  # Grid expansion, CIA source swapping, warm start (used by run_grid.py)
 │  └─ ...                      # Standalone helpers (escape, abundance and T-P conversion scripts)
 ├─ ggchem_inputs/
 │  └─ param.in                 # GGchem's main parameter file (abundances.in, pt_helios.in are generated here)
 ├─ helios_inputs/
 │  ├─ param.dat                # HELIOS's main parameter file (pre-set to Earth-sized moon around Jupiter-like FFP)
-│  └─ species.dat              # List of species for HELIOS (P_BOA.dat is generated here)
+│  └─ all_species.dat          # Catalog of species HELIOS has opacities for (P_BOA.dat is generated here)
 ├─ output/                     # All simulation results, one directory per run
 └─ .archive/                   # Legacy bash drivers, replaced by the Python scripts
 ```

@@ -2,7 +2,7 @@
 
 /helios_inputs/*
 !/helios_inputs/param.dat
-!/helios_inputs/species.dat
+!/helios_inputs/all_species.dat
 
 /ggchem_inputs/*
 !/ggchem_inputs/param.in

@@ -22,6 +22,10 @@ simulation_params:
   # Extra HELIOS run with the outgassed composition held fixed (no GGchem), in <out_dir>/<name>_outgassed/.
   # Needs outgas_or_manual "outgas". "none", "also" (before the coupled run) or "only" (skip the coupled run)
   uncoupled_outgassed_run: "none"
+  # Species HELIOS loads opacities for (see chelio_sim/species.py): "auto" (from the composition) or a list of
+  # species from helios_inputs/all_species.dat, e.g. [H2O, CO2, CH4, H2]. CIA pairs are added automatically
+  # when both collision partners are active.
+  active_species: "auto"
   toa_pressure: 1.0e0
   internal_temp: 100
   surface_albedo: 0.1

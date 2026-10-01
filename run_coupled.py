@@ -11,6 +11,7 @@ import numpy as np
 
 # Import the refactored modules
 from chelio_sim import abundances, external_runners, init_pt, mixfile_utils, run_modes
+from chelio_sim import species as species_utils
 
 
 def setup_logging(log_dir, config):
@@ -98,28 +99,15 @@ def main():
         default=None,
         help="Path to an initial P-T profile file. If provided, this will override the default initial P-T profile generation."
     )
+    parser.add_argument(
+        "--helios_param_file",
+        type=str,
+        default=os.path.join("helios_inputs", "param.dat"),
+        help="HELIOS base parameter file copied to $HELIOS_PATH/param.dat (relative paths are relative to the Chelio root). Default: helios_inputs/param.dat."
+    )
 
     # Add overrides for key simulation parameters
-    sim_params = [
-        "toa_pressure",
-        "internal_temp",
-        "surface_albedo",
-        "melt_temp",
-        "melt_frac",
-        "h_ocean",
-        "ctoh_ratio",
-        "ntoc_ratio",
-        "fO2",
-        "stoc_ratio",
-        "cltoc_ratio",
-        "min_boa_pressure",
-        "max_boa_pressure",
-        "surface_pressure",
-        "a_h",
-        "a_c",
-        "a_o",
-        "a_n",
-    ]
+    sim_params = run_modes.SIM_PARAMS
     for param in sim_params:
         parser.add_argument(f"--{param}", type=float, help=f"Override {param} from config.")
     args = parser.parse_args()
@@ -194,11 +182,11 @@ def main():
         if os.path.exists(outgassed_tp_file):
             print(f"Error: The uncoupled outgassed run '{args.name}_outgassed' already exists in {run_output_dir_outgassed}.")
             print("       Please choose a different name or remove the existing run.")
-            sys.exit(1)
+            sys.exit(run_modes.EXIT_ALREADY_DONE)
     elif (os.path.exists(convergence_file) and open(convergence_file).read().strip() == "1") or os.path.exists(final_tp_file):
         print(f"Error: A completed run with name '{args.name}' already exists in {run_output_dir}.")
         print("       Please choose a different name or remove the existing run.")
-        sys.exit(1)
+        sys.exit(run_modes.EXIT_ALREADY_DONE)
 
     # 4. SETUP LOGGING
     log = setup_logging(log_dir, config["logging"])
@@ -208,7 +196,12 @@ def main():
     for warning in mode_warnings:
         log.warning(f"WARNING: {warning}")
 
-    shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'param.dat'), os.path.join(helios_path, 'param.dat'))
+    helios_param_file = os.path.join(chelio_path, args.helios_param_file)  # join keeps absolute paths as they are
+    if not os.path.isfile(helios_param_file):
+        log.error(f"HELIOS parameter file '{helios_param_file}' not found.")
+        sys.exit(1)
+    log.info(f"HELIOS parameter file: {helios_param_file}")
+    shutil.copy(helios_param_file, os.path.join(helios_path, 'param.dat'))
 
     # 5. EXECUTE SIMULATION LOGIC
     try:
@@ -221,7 +214,7 @@ def main():
 
             os.makedirs(run_output_dir_outgassed, exist_ok=True)
 
-            abundances.calculate_abundances_atmodeller(
+            outgassed_vmrs = abundances.calculate_abundances_atmodeller(
                 output_dir="helios",
                 melt_frac=sim_p["melt_frac"],
                 T_surf=sim_p["melt_temp"],
@@ -232,7 +225,7 @@ def main():
                 StoC=sim_p["stoc_ratio"],
                 CltoC=sim_p["cltoc_ratio"],
             )
-            shutil.copy(os.path.join(chelio_path, "helios_inputs", "species.dat"), os.path.join(run_output_dir_outgassed, "species.dat"))
+            _, outgassed_species_file = species_utils.setup_species_file(sim_p, run_output_dir_outgassed, outgassed_vmrs, write_vmrs=True)
             p_boa_path = os.path.join(chelio_path, "helios_inputs", "P_BOA.dat")
             shutil.copy(p_boa_path, os.path.join(run_output_dir_outgassed, "P_BOA.dat"))
 
@@ -256,7 +249,7 @@ def main():
                 "boa_pressure": boa_p,
                 "internal_temperature": sim_p["internal_temp"],
                 "surface_albedo": sim_p["surface_albedo"],
-                "path_to_species_file": os.path.join(chelio_path, "helios_inputs", "species.dat"),
+                "path_to_species_file": outgassed_species_file,
                 "coupling_mode": "no",
                 "coupling_iteration_step": 0,
                 "coupling_speed_up": "no",
@@ -273,10 +266,11 @@ def main():
             return
 
         # --- Initial Setup ---
+        outgassed_vmrs = None  # set if the coupled run takes its composition from atmodeller
         if chemistry == "equilibrium":
             log.info("Initializing GGchem with initial abundances and P-T profile...")
             if sim_p["outgas_or_manual"] == "outgas":
-                abundances.calculate_abundances_atmodeller(
+                outgassed_vmrs = abundances.calculate_abundances_atmodeller(
                     output_dir="ggchem",
                     melt_frac=sim_p["melt_frac"],
                     T_surf=sim_p["melt_temp"],
@@ -300,7 +294,6 @@ def main():
 
                 log.info(f"P_BOA ({boa_p}) is within the range of {min_boa_pressure} to {max_boa_pressure} dyn/cm^2.")
                 
-                shutil.copy(os.path.join(chelio_path, 'helios_inputs', 'species.dat'), run_output_dir)
                 shutil.copy(p_boa_path, os.path.join(run_output_dir, "P_BOA.dat"))
             else:
                 abundances.calculate_abundances_manual(
@@ -435,6 +428,9 @@ def main():
                     log.error(f"Initial T-P profile file not found: {os.path.join(run_output_dir, f'{args.name}_tp_coupling_{i_min-1}.dat')}")
                     sys.exit(1)
         
+        # --- Active species (HELIOS species file, mixfile columns) ---
+        active_species, species_file = species_utils.setup_species_file(sim_p, run_output_dir, outgassed_vmrs)
+
         # --- Coupling Loop ---
         if i_min >= i_full:
             coupling_speed_up = "yes"
@@ -448,7 +444,7 @@ def main():
             # Convert GGchem output to HELIOS mixfile
             ggchem_output = os.path.join(ggchem_path, "Static_Conc.dat")
             shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i_min}.dat"))
-            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
+            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, active_species, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
         elif chemistry == "constant":
             # Create mixfile with constant mixing ratios
             t_min_max = mixfile_utils.create_constant_mixfile(P_bar, T_k, constant_mixing_ratios, helios_mixfile, t_min_max, relative_humidity=relative_humidity, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
@@ -493,7 +489,7 @@ def main():
                 "boa_pressure": boa_p,
                 "internal_temperature": sim_p["internal_temp"],
                 "surface_albedo": sim_p["surface_albedo"],
-                "path_to_species_file": os.path.join(chelio_path, "helios_inputs", "species.dat"),
+                "path_to_species_file": species_file,
                 "file_with_vertical_mixing_ratios": helios_mixfile,
                 "path_to_temperature_file": os.path.join(run_output_dir, f"{args.name}_tp_coupling_{i-1}.dat"),
                 "kappa_value": "file",
@@ -538,7 +534,7 @@ def main():
                 
                 # Convert GGchem output to HELIOS mixfile
                 shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
-                t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
+                t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, helios_mixfile, t_min_max, active_species, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
             
             elif chemistry == "constant":
                 # Read the new T-P profile and create updated mixfile with condensation
@@ -551,7 +547,7 @@ def main():
         final_mixfile = os.path.join(run_output_dir, f"vertical_mix_{i+1}.dat")
         
         if chemistry == "equilibrium":
-            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile, t_min_max, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
+            t_min_max = mixfile_utils.convert_ggchem_to_helios(ggchem_output, final_mixfile, t_min_max, active_species, coupling_speed_up=(coupling_speed_up=="yes"), delad_table_path=delad_table_path)
             shutil.copy(ggchem_output, os.path.join(run_output_dir, f"Static_Conc_{i+1}.dat"))
             # remove database.dat in ggchem_path
             try:

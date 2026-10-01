@@ -632,7 +632,7 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_mi
         raise
 
 
-def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in"), coupling_speed_up=False, delad_table_path=DEFAULT_DELAD_TABLE_PATH):
+def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max, species, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in"), coupling_speed_up=False, delad_table_path=DEFAULT_DELAD_TABLE_PATH):
     """
     Converts GGchem output (Static_Conc.dat) to a HELIOS mixfile.
 
@@ -640,6 +640,7 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max,
         ggchem_output_path (str): Path to the GGchem output file (e.g., Static_Conc.dat).
         helios_mixfile_path (str): Path to write the output HELIOS mixfile to.
         t_min_max (tuple): Tuple containing the minimum and maximum temperatures for the delad table.
+        species (list): Active species (chelio_sim.species) to write into the mixfile.
         ref_pt (str): Path to the reference profile file.
         coupling_speed_up (bool): Whether to use speed-up coupling with previous mixfile.
         delad_table_path (str): Path of the kappa/delad table (overwritten on every call).
@@ -648,23 +649,7 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max,
         f"Converting GGchem output '{ggchem_output_path}' to HELIOS mixfile '{helios_mixfile_path}'"
     )
 
-    # read relevant species from helios_inputs/species.dat
-    # Path is relative to this file's location in the package structure.
-    species_dat_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../helios_inputs/species.dat")
-    )
-    try:
-        species = np.loadtxt(species_dat_path, dtype=str, usecols=(0,))[1:]
-    except FileNotFoundError:
-        log.error(f"species.dat file not found at {species_dat_path}")
-        raise
-
-    # if CIA_N2N2 exists, append N2 to species
-    if "CIA_N2N2" in species:
-        species = np.append(species, "N2")
-
-    # remove CIA (assumes that CIA species, other than N2, are already accounted for!)
-    species = np.array([s for s in species if s[:3] != "CIA"])
+    species = np.array(species)
 
     # read GGchem output file
     try:
@@ -703,6 +688,10 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max,
         ]
     )
     new_header = np.array(new_header)
+
+    missing = sorted(set(species) - set(new_header))
+    if missing:
+        raise ValueError(f"Active species {missing} are not in the GGchem output '{ggchem_output_path}'.")
 
     # convert data
     new_data = np.zeros((len(data), len(new_header)))
