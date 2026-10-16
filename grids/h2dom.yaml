@@ -1,0 +1,38 @@
+# H2-dominated atmospheres of tidally heated exomoons around free-floating planets
+# (Dahlbuedding et al. 2026, arXiv:2602.05378, Table 2), equilibrium chemistry with condensation.
+# Main grid: 3 P_surf x 6 T_int x 5 X_C+O x 3 C/O = 270 runs, plus two variations at X_C+O = 1e-2, C/O = 0.59:
+# nitrogen (X_N = 1e-4, 1e-2; 36 runs) and Io-like gravity (g = 180 cm/s^2; 18 runs).
+# Select a part with e.g. --only planet=Io, --only X_N=1e-4,1e-2 or --only CplusO=1e-3 --only CtoO=0.59.
+#
+# The paper used at most 1000 HELIOS iterations in the first coupling step and at most 10 coupling
+# iterations (config.yaml: coupling.helios_max_iter_initial: 1000, i_max: 10).
+runner: coupled
+out_dir: output/EqCond+Remove
+name: "{planet}_P0={P0}_Tint={internal_temp}_CplusO={CplusO_name}_CtoO={CtoO_name}{aN_suffix}"
+
+fixed:
+  outgas_or_manual: manual
+  chemistry: equilibrium
+  toa_pressure: 1.0e-1   # dyn/cm^2 (= 1e-7 bar)
+  planet: Earth          # label: g = 981 cm/s^2 from helios_inputs/param.dat
+  X_N: 0                 # N fraction of all atoms
+
+grid:
+  surface_pressure: [1.0e6, 1.0e7, 1.0e8]       # dyn/cm^2
+  internal_temp: [50, 75, 100, 150, 200, 250]   # K
+
+cases:
+  # main grid
+  - CplusO: [1.0e-3, 3.16e-3, 1.0e-2, 3.16e-2, 1.0e-1]   # (C+O)/(H+C+O), solar: 7.8e-4
+    CtoO: [0.1, 0.59, 1.0]                               # solar: 0.59
+  # nitrogen
+  - CplusO: 1.0e-2
+    CtoO: 0.59
+    X_N: [1.0e-4, 1.0e-2]
+  # Io-like gravity
+  - CplusO: 1.0e-2
+    CtoO: 0.59
+    planet: Io
+    helios_param_file: helios_inputs/param_Io.dat   # param.dat with surface gravity 180 cm/s^2
+
+derive: [c_plus_o_abundances]   # CplusO, CtoO, X_N -> a_h, a_c, a_o, a_n (+ name fields)

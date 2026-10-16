@@ -1,0 +1,16 @@
+# N2-dominated atmospheres: T_int x P_surf x manual elemental abundances, equilibrium chemistry
+# (formerly run_grid_manual.py). 3 x 3 x 5 x 5 x 5 x 1 = 1125 runs.
+runner: coupled
+out_dir: output/N2dom
+name: "Earth_Tint={internal_temp}K_Psurf={psurf_bar}bar_aH={a_h}_aC={a_c}_aO={a_o}_aN={a_n}"
+
+fixed:
+  outgas_or_manual: manual
+
+grid:
+  internal_temp: [50, 100, 150]             # K
+  surface_pressure: [1.0e6, 1.0e7, 1.0e8]   # dyn/cm^2
+  a_h: [1.0e-6, 1.0e-2, 1.0e-1, 1.0, 3.0]
+  a_c: [1.0e-6, 1.0e-2, 1.0e-1, 2.5e-1, 5.0e-1]
+  a_o: [1.0e-6, 1.0e-2, 1.0e-1, 5.0e-1, 1.0]
+  a_n: [1.0]

@@ -1,0 +1,19 @@
+# CIA sensitivity (2nd paper; formerly run_grid_fast_cia.py): for every CIA source in
+# $HELIOS_PATH/input/opacity/hitran_cia/, 50/50 constant-chemistry atmospheres of the pair (100 % for self-CIA).
+# Select pairs/sources with e.g. --only cia_pair=N2-CH4,CO2-CO2 or --only cia=N2-CH4_2024.
+# surface_pressure may also be "critical" (lower critical pressure of the two molecules), e.g. [1.0e6, critical].
+runner: coupled
+out_dir: output/CIA_comparison_HELIOS
+name: "CIA_{cia}_Tint={internal_temp}K_Psurf={psurf_bar}bar"
+
+fixed:
+  chemistry: constant
+  outgas_or_manual: manual
+
+grid:
+  cia: auto                   # all sources in hitran_cia/
+  internal_temp: [145]        # K
+  surface_pressure: [1.0e8]   # dyn/cm^2
+
+derive: [cia_pair_mixing]
+warm_start: internal_temp     # start from the last T-P of the next-higher T_int run in out_dir

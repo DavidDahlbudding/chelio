@@ -1,0 +1,26 @@
+# Early Mars benchmark vs. Turbet+ (2020) (formerly run_grid_EarlyMars_cia.py):
+# 2 bar CO2 with H2O at 80 % relative humidity and trace H2 or CH4, for different CO2-H2 / CO2-CH4 CIA sources.
+# Needs the (untracked) helios_inputs/param_EarlyMars.dat. Select a gas with --only trace_gas=H2.
+runner: coupled
+out_dir: output/EarlyMars_CIA_comparison_test
+helios_param: helios_inputs/param_EarlyMars.dat
+name: "EarlyMars_{trace_gas}={trace_pct:g}pct_CIA={cia}"
+
+fixed:
+  surface_pressure: 2.0e6   # dyn/cm^2
+  chemistry: constant
+  relative_humidity: 0.8
+  outgas_or_manual: manual
+  internal_temp: 0
+  surface_albedo: 0.2
+
+cases:
+  - trace_gas: H2
+    cia: [CO2-H2_2018_Tex=150K, CO2-H2_2024]
+  - trace_gas: CH4
+    cia: [CO2-CH4_2017_Tex=150K, CO2-CH4_2020, CO2-CH4_2024_main]
+
+grid:
+  trace_pct: [0.5, 1, 2, 3, 5, 10]   # % of trace_gas
+
+derive: [early_mars_mixing]   # CO2 = 1 - trace, H2O = 1 (capped by saturation), trace_gas = trace
