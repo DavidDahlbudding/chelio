@@ -5,3 +5,4 @@ atmodeller==0.8.2
 pyyaml==6.0.3
 tqdm==4.67.1
 h5py==3.14.0
+lxmie==1.1.1  # only for chelio_sim/make_mie_files.py (cloud Mie tables)

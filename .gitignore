@@ -3,6 +3,10 @@
 /helios_inputs/*
 !/helios_inputs/param.dat
 !/helios_inputs/all_species.dat
+# clouds: refractive indices are tracked, Mie tables (chelio_sim/make_mie_files.py) are generated
+!/helios_inputs/clouds/
+/helios_inputs/clouds/*
+!/helios_inputs/clouds/refractive_index/
 
 /ggchem_inputs/*
 !/ggchem_inputs/param.in
