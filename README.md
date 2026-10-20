@@ -25,7 +25,7 @@ Alternatively, `--chemistry constant` skips GGchem and uses fixed volume mixing 
 Before running Chelio, ensure you have the following installed and configured:
 
 * **Python 3** with the packages in `requirements.txt` (`pip install -r requirements.txt`).
-* **HELIOS**: the 1D radiative transfer code. Chelio requires the modified version at [DavidDahlbudding/HELIOS](https://github.com/DavidDahlbudding/HELIOS). It adds the coupling flags Chelio passes to HELIOS: `coupling_speed_up`, `started_convection` and the `kappa_file_path` table input.
+* **HELIOS**: the 1D radiative transfer code. Chelio requires the modified version at [DavidDahlbudding/HELIOS](https://github.com/DavidDahlbudding/HELIOS). It adds the coupling flags Chelio passes to HELIOS: `coupling_speed_up`, `started_convection` and the `kappa_file_path` table input. For clouds, use a version with the fixed cloud asymmetry parameter (branch `fix-cloud-asymmetry-parameter`, see [Clouds](#clouds)).
 * **GGchem**: the equilibrium chemistry code (compiled `./ggchem` executable).
 
 ### Environment Setup
@@ -107,6 +107,36 @@ HELIOS only loads the opacities of the *active* species of a run, since reading 
 
 CIA pairs are never listed: a pair is included exactly when both collision partners are active. H₂O is always active, because HELIOS needs it; with constant chemistry it gets a VMR of 1e-30 if `constant_mixing_ratios` does not list it. The resulting species file is written to `output/<name>/species.dat`.
 
+### Clouds
+
+`run_coupled.py` can add one HELIOS cloud deck in HELIOS' `manual` mode: no cloud below the cloud base `p_bot`, and a cloud mixing ratio (particles per gas molecule) `f = f_bot (p / p_bot)^(1/h - 1)` above it. The particles follow a lognormal size distribution, and their optical properties come from Mie tables. Runs stay cloud-free as long as `cloud_bottom_mixing_ratio` is 0, which is the default. The settings live in `simulation_params` of `config.yaml`, and each one can be overridden on the command line (`--cloud_bottom_pressure 1e5`, …):
+
+| Key | Meaning |
+|---|---|
+| `cloud_mie_path` | directory with the Mie tables (absolute, or relative to the Chelio root) |
+| `cloud_r_mode` | mode of the lognormal dN/dr [µm] (default 2) |
+| `cloud_r_std_dev` | geometric standard deviation σ_g, > 1 (default 2) |
+| `cloud_bottom_pressure` | cloud base [dyn/cm²], must lie inside the atmosphere |
+| `cloud_bottom_mixing_ratio` | f_bot, cloud particles per gas molecule (0 = no cloud) |
+| `cloud_to_gas_scale_height_ratio` | h (default 0.5) |
+
+Every HELIOS call gets `-number_of_cloud_decks` (0 without a cloud), so the cloud section of `helios_inputs/param.dat` never matters. A cloudy run logs a `Clouds: …` line and writes `cloud_settings.json` (f_bot, nominal optical depth, Planck-mean cross section, …) to its output directory. `run_fast.py` has no clouds and stops if `cloud_bottom_mixing_ratio` > 0.
+
+**Mie tables.** `chelio_sim/make_mie_files.py` computes them with LX-MIE (`pip install lxmie`) from a refractive-index file in the format of the [LX-MIE compilation](https://github.com/NewStrangeWorlds/LX-MIE/tree/master/compilation). Water ice (Warren 1984) is included in `helios_inputs/clouds/refractive_index/H2O_s.dat`:
+
+```bash
+python3 -m chelio_sim.make_mie_files --ri helios_inputs/clouds/refractive_index/H2O_s.dat --out helios_inputs/clouds/H2O_s/
+python3 -m chelio_sim.make_mie_files --check --out helios_inputs/clouds/H2O_s/   # validate, plot to analyze/images/
+```
+
+The tables (about 12 MB, not tracked by git) cover 0.8× the smallest to 1.25× the largest HELIOS bin edge of `$HELIOS_PATH/input/opacity/r50_kdistr/`. HELIOS gives bins outside the Mie wavelength range zero cloud opacity without a warning. `meta.json` in the output directory records the inputs. `--const_nk N K` instead of `--ri` uses a constant refractive index, for debugging only.
+
+**Optical depth instead of f_bot.** f_bot (around 1e-20) is hard to choose directly, and the same f_bot gives an optical depth proportional to p_bot. In grid files, the derive hook `cloud_from_tau` therefore takes the labels `cloud_tau` (total optical depth, 0 = cloud-free) and `cloud_pbot_bar` (cloud base in bar), and sets f_bot = τ μ m_u g / (p_bot h C̄_ext). Here C̄_ext is the Planck mean at T_int of the size-averaged extinction cross section, μ = 2.12 and g = `planet_params.g`. The same functions are in `chelio_sim/clouds.py`.
+
+`grids/cloud_test.yaml` is the first test: an H₂O-ice deck at 1, 0.1 and 0.01 bar with τ = 0.1, 1 and 10, plus a cloud-free baseline, in the representative case of Dahlbüdding et al. (2026). `python3 analyze/cloud_test.py [--checks]` makes the summary table and figures.
+
+**HELIOS fix.** HELIOS (upstream `master` and `development`) averaged the cloud asymmetry parameter g wrongly over the size distribution: it used the mean scattering cross section in cm² as g, so clouds scattered isotropically (g ≈ 1e-6). The fork's branch `fix-cloud-asymmetry-parameter` uses the scattering-weighted mean g instead; `make_mie_files --check` tests the HELIOS in `$HELIOS_PATH` for it.
+
 ### Running a Parameter Grid Exploration
 
 `run_grid.py` runs many `run_coupled.py` (or `run_fast.py`) calls, one after another. The grid is defined in a YAML file in `grids/`: fixed parameters, lists of values to combine, the output directory and the run-name template. See `grids/README.md` for the keys.
@@ -122,8 +152,9 @@ python3 run_grid.py grids/cia_comparison.yaml --only cia_pair=N2-CH4
 | `grids/n2dom.yaml` | T_int × P_surf × manual elemental abundances, using `run_coupled.py`. |
 | `grids/n2dom_fast.yaml` | The same kind of grid using the fast approximate RT (`run_fast.py`). |
 | `grids/outgassing.yaml` | Outgassed atmospheres: T_int × atmodeller parameters (melt temperature, H ocean, C/H, N/C, fO2). |
-| `grids/cia_comparison.yaml` | Every available CIA opacity source (see 2nd paper). Each source is swapped into HELIOS' `r50_kdistr` in turn, constant-chemistry runs are made, and the default is restored afterwards. `python3 run_grid.py --list-cia-sources` / `--restore-cia-defaults` list the sources and restore the defaults. |
+| `grids/cia_comparison.yaml` | Every available CIA opacity source (see 2nd paper). Each source is swapped into HELIOS' `r50_kdistr` in turn, constant-chemistry runs are made, and the default is restored afterwards. `python3 run_grid.py --list-cia-sources [FOLDER]` / `--restore-cia-defaults [FOLDER]` list the sources and copy the default ones into `r50_kdistr`, from `$HELIOS_PATH/input/opacity/FOLDER` (default `hitran_cia`; e.g. `hitran_cia_new`, `hitran_cia_legacy`). A default missing from the folder is looked up without its option suffix (`N2-N2_2021_Tconst=50K` → `N2-N2_2021`); pairs without one keep their current file. |
 | `grids/early_mars_cia.yaml` | Benchmark against Turbet+ (2020): 2 bar CO₂ with 80 % RH H₂O and trace H₂/CH₄, for different CO₂–H₂ / CO₂–CH₄ CIA sources. It needs `helios_inputs/param_EarlyMars.dat`. |
+| `grids/cloud_test.yaml` | First cloud test: H₂O-ice deck (base 1, 0.1, 0.01 bar; τ = 0.1, 1, 10) + cloud-free baseline in an H₂-dominated exomoon atmosphere (see [Clouds](#clouds)). |
 
 With `run_coupled.py`, runs that already finished are skipped, so an interrupted grid can simply be started again (an unfinished run restarts from scratch).
 
@@ -157,6 +188,8 @@ The notebooks provide templates for common analysis tasks:
 5.  **EscapeStatistics:** Generate histograms of the Jeans escape parameter and atmospheric escape timescales.
 6.  **cornerplots:** Corner plots of surface conditions across a parameter grid.
 
+`cloud_test.py` summarises the cloud test (`grids/cloud_test.yaml`): table, T-P and mixing-ratio profiles, ΔT_surf against the cloud optical depth.
+
 For the CIA study, `cia-opac_relevance.ipynb` and the CLI script `opac_relevance.py` (e.g. `python3 analyze/opac_relevance.py --pair CO2-CH4 --Tmax 600`) map where in T-P space a CIA pair dominates the opacity.
 
 ---
@@ -177,6 +210,7 @@ chelio/
 ├─ analyze/                    # Analysis notebooks and tools
 │  ├─ 1_IndividualRun.ipynb, 2_…, 3_…, A_…, B_…, C_cornerplots.ipynb
 │  ├─ cia-opac_relevance.ipynb, opac_relevance.py
+│  ├─ cloud_test.py            # Summary of the cloud test grid
 │  └─ analyze_modules/         # data_loader.py (ChelioRun, sweep/matrix loaders), plot_utils.py
 ├─ chelio_sim/                 # Python package for simulation logic and utilities
 │  ├─ external_runners.py      # Wrappers for HELIOS and GGchem
@@ -186,12 +220,15 @@ chelio/
 │  ├─ rt_utils.py              # Approximate fast RT with on-the-fly Rosseland mean calculation*
 │  ├─ species.py               # Active species of a run → HELIOS species file
 │  ├─ grid.py                  # Grid expansion, CIA source swapping, warm start (used by run_grid.py)
+│  ├─ clouds.py                # HELIOS Mie-file contract, size-averaged optics, tau <-> f_bot
+│  ├─ make_mie_files.py        # Mie tables for HELIOS clouds with LX-MIE (+ --check)
 │  └─ ...                      # Standalone helpers (escape, abundance and T-P conversion scripts)
 ├─ ggchem_inputs/
 │  └─ param.in                 # GGchem's main parameter file (abundances.in, pt_helios.in are generated here)
 ├─ helios_inputs/
 │  ├─ param.dat                # HELIOS's main parameter file (pre-set to Earth-sized moon around Jupiter-like FFP)
-│  └─ all_species.dat          # Catalog of species HELIOS has opacities for (P_BOA.dat is generated here)
+│  ├─ all_species.dat          # Catalog of species HELIOS has opacities for (P_BOA.dat is generated here)
+│  └─ clouds/                  # refractive_index/ (tracked) and generated Mie tables, e.g. H2O_s/
 ├─ output/                     # All simulation results, one directory per run
 └─ .archive/                   # Legacy bash drivers, replaced by the Python scripts
 ```

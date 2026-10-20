@@ -53,6 +53,14 @@ simulation_params:
     CO2: 0.01
     H2: 0.97
     H2O: 0.01
+  # Clouds: one HELIOS cloud deck, manual profile (run_coupled.py only). Cloud-free while cloud_bottom_mixing_ratio is 0.
+  # Mie files: python3 -m chelio_sim.make_mie_files (see README "Clouds")
+  cloud_mie_path: null                 # dir with r{:.6f}.dat files (absolute or relative to CHELIO_PATH)
+  cloud_r_mode: 2.0                    # micron, mode of the dN/dr lognormal
+  cloud_r_std_dev: 2.0                 # geometric standard deviation (> 1)
+  cloud_bottom_pressure: 1.0e5         # dyn/cm^2
+  cloud_bottom_mixing_ratio: 0.0       # cloud particles per gas molecule
+  cloud_to_gas_scale_height_ratio: 0.5
 
 planet_params:
   g: 981 # cm/s^2
@@ -62,7 +70,7 @@ coupling:
   i_max: 10 # Maximum coupling iterations
   i_full_convergence: 4 # Iteration to switch to full convergence
   rad_eq_criterion: 1.0e-8
-  helios_max_iter_initial: 15000
+  helios_max_iter_initial: 1000 # first coupling iteration (as in Dahlbuedding+2026)
   helios_max_iter_intermediate: 15000
   helios_max_iter_full: 15000
 

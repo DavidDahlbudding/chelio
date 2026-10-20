@@ -118,6 +118,10 @@ def main():
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(1)
+    if float(config["simulation_params"].get("cloud_bottom_mixing_ratio") or 0.0) > 0:
+        print("Error: cloud_bottom_mixing_ratio > 0 in the config, but the fast grey RT of run_fast.py has no clouds. "
+              "Use run_coupled.py (HELIOS) for cloudy runs, or set cloud_bottom_mixing_ratio: 0.")
+        sys.exit(1)
     chemistry = config["simulation_params"]["chemistry"]
     uncoupled_outgassed_run = config["simulation_params"]["uncoupled_outgassed_run"]
 

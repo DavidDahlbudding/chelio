@@ -26,6 +26,7 @@ is going and replaced by the default source afterwards. With a `cia` source, sur
 also be "critical": the lower critical pressure of the two molecules of the pair.
 """
 import contextlib
+import functools
 import glob
 import itertools
 import os
@@ -45,11 +46,14 @@ CHELIO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER_SCRIPTS = {"coupled": "run_coupled.py", "fast": "run_fast.py"}
 _MODE_KEYS = ("chemistry", "outgas_or_manual", "uncoupled_outgassed_run", "active_species")
 RUNNER_FLAGS = {
-    "coupled": {*run_modes.SIM_PARAMS, *_MODE_KEYS, "constant_mixing_ratios", "relative_humidity", "init_pt_file", "helios_param_file"},
+    "coupled": {*run_modes.SIM_PARAMS, *_MODE_KEYS, "constant_mixing_ratios", "relative_humidity", "init_pt_file", "helios_param_file",
+                *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM},
     "fast": {*run_modes.SIM_PARAMS, *_MODE_KEYS, "constant_mixing_ratios"},
 }
 SPEC_KEYS = {"runner", "out_dir", "name", "config", "helios_param", "fixed", "grid", "cases", "derive", "warm_start"}
 
+# Folder in $HELIOS_PATH/input/opacity/ with the CIA sources of CIA grids (`cia` key)
+CIA_SOURCE_DIR = "hitran_cia"
 # Default CIA sources (from create_all_CIAopacs.bash), restored in r50_kdistr after testing other sources
 DEFAULT_CIA_SOURCES = {
     "CH4-CH4": "CH4-CH4_2011",
@@ -321,30 +325,65 @@ def cia_target_path(pair):
     return os.path.join(_opacity_dir("r50_kdistr"), f"CIA_{pair.replace('-', '')}_opac_ip_kdistr.h5")
 
 
-def discover_cia_sources():
-    """All CIA sources (file names without .h5) in hitran_cia/, sorted."""
-    return sorted(Path(f).stem for f in glob.glob(os.path.join(_opacity_dir("hitran_cia"), "*.h5")))
+def cia_source_dir(source_dir=CIA_SOURCE_DIR):
+    """$HELIOS_PATH/input/opacity/<source_dir> (absolute paths stay as they are); FileNotFoundError if missing."""
+    path = os.path.join(_opacity_dir(""), source_dir)
+    if not os.path.isdir(path):
+        available = sorted(Path(d).name for d in glob.glob(os.path.join(_opacity_dir(""), "hitran_cia*")) if os.path.isdir(d))
+        raise FileNotFoundError(f"CIA source folder {path} not found (available: {', '.join(available) or 'none'})")
+    return path
 
 
-def install_cia_source(source):
-    source_path = os.path.join(_opacity_dir("hitran_cia"), f"{source}.h5")
+def discover_cia_sources(source_dir=CIA_SOURCE_DIR):
+    """All CIA sources (file names without .h5) in source_dir (default hitran_cia/), sorted."""
+    return sorted(Path(f).stem for f in glob.glob(os.path.join(cia_source_dir(source_dir), "*.h5")))
+
+
+def install_cia_source(source, source_dir=CIA_SOURCE_DIR):
+    source_path = os.path.join(cia_source_dir(source_dir), f"{source}.h5")
     if not os.path.exists(source_path):
         raise FileNotFoundError(f"CIA source {source_path} not found")
     target = cia_target_path(cia_pair(source))
-    print(f"CIA: {source}.h5 -> {os.path.basename(target)}")
+    print(f"CIA: {Path(source_dir).name}/{source}.h5 -> {os.path.basename(target)}")
     shutil.copy2(source_path, target)
 
 
-def restore_default_cia(pairs=None):
-    """Copies the default source of each pair (default: all pairs in DEFAULT_CIA_SOURCES) into r50_kdistr."""
+# Option suffixes of HELIOS' scripts/create_all_CIAopacs.py, e.g. "_Tconst=50K", "_Tex=600K_lamex=9.0um", "_fac=0.6"
+_CIA_OPTION_SUFFIX = re.compile(r"(?:_(?:fac|logfac|Tex|Tconst|lamex)=[^_]+)+$")
+
+
+def default_cia_source(pair, source_dir=CIA_SOURCE_DIR):
+    """
+    Default source of a pair in source_dir: DEFAULT_CIA_SOURCES[pair] if that file exists there, otherwise the same
+    source without option suffixes (e.g. N2-N2_2021_Tconst=50K -> N2-N2_2021: folders made with the default
+    temperature fill of the current create_all_CIAopacs.py need no explicit temperature extension).
+    None if the pair has no default or neither file exists.
+    """
+    default = DEFAULT_CIA_SOURCES.get(pair)
+    if default is None:
+        return None
+    available = set(discover_cia_sources(source_dir))
+    for candidate in (default, _CIA_OPTION_SUFFIX.sub("", default)):
+        if candidate in available:
+            return candidate
+    return None
+
+
+def restore_default_cia(pairs=None, source_dir=CIA_SOURCE_DIR):
+    """
+    Copies the default source of each pair (default: all pairs in DEFAULT_CIA_SOURCES) from source_dir
+    (a folder in $HELIOS_PATH/input/opacity/, e.g. hitran_cia, hitran_cia_new, hitran_cia_legacy) into r50_kdistr.
+    Pairs without a default source in that folder keep their current file in r50_kdistr.
+    """
     for pair in pairs or DEFAULT_CIA_SOURCES:
-        default = DEFAULT_CIA_SOURCES.get(pair)
-        if default is None:
+        source = default_cia_source(pair, source_dir)
+        if source is not None:
+            install_cia_source(source, source_dir)
+        elif pair not in DEFAULT_CIA_SOURCES:
             print(f"Warning: no default CIA source defined for {pair}; r50_kdistr keeps the tested one")
-        elif not os.path.exists(os.path.join(_opacity_dir("hitran_cia"), f"{default}.h5")):
-            print(f"Warning: default CIA source {default}.h5 not found")
         else:
-            install_cia_source(default)
+            print(f"Warning: default CIA source {DEFAULT_CIA_SOURCES[pair]}.h5 (or without suffix) not in "
+                  f"{Path(source_dir).name}/; r50_kdistr keeps its current {os.path.basename(cia_target_path(pair))}")
 
 
 @contextlib.contextmanager
@@ -406,8 +445,56 @@ def c_plus_o_abundances(params):
     params["aN_suffix"] = f"_aN={_format_e_num(x_n)}" if x_n else ""
 
 
+@functools.lru_cache(maxsize=1)
+def _config_gravity():
+    """planet_params.g [cm/s^2] of the default config.yaml."""
+    with open(CHELIO_ROOT / "config.yaml") as f:
+        return float(yaml.safe_load(f)["planet_params"]["g"])
+
+
+def cloud_from_tau(params):
+    """
+    One HELIOS cloud deck from the labels cloud_tau (total optical depth, 0 = cloud-free) and cloud_pbot_bar
+    (cloud base [bar]). Sets cloud_bottom_pressure [dyn/cm^2] and cloud_bottom_mixing_ratio with
+    clouds.f_bot_for_tau, where C_ext is the Planck mean of the size-averaged Mie cross section at internal_temp,
+    mu = clouds.MU_DEFAULT and g = planet_params.g of config.yaml. Needs the run parameters cloud_mie_path,
+    cloud_r_mode, cloud_r_std_dev and cloud_to_gas_scale_height_ratio (and the Mie files).
+    Also sets the name field cloud_name: 'none', or e.g. 'H2Os_pbot=1e-1_tau=1' (Mie directory name without '_').
+    """
+    from chelio_sim import clouds
+
+    tau = float(params.get("cloud_tau", 0))
+    if tau < 0:
+        raise ValueError(f"cloud_tau must be >= 0, got {tau:g}")
+    if tau == 0:
+        params["cloud_bottom_mixing_ratio"] = 0.0
+        params["cloud_name"] = "none"
+        return
+    for key in ("cloud_pbot_bar", "cloud_mie_path", "cloud_r_mode", "cloud_r_std_dev", "cloud_to_gas_scale_height_ratio", "internal_temp"):
+        if key not in params:
+            raise ValueError(f"cloud_from_tau: a cloud (cloud_tau > 0) needs the parameter {key!r}")
+
+    mie_dir = CHELIO_ROOT / str(params["cloud_mie_path"])  # absolute paths stay as they are
+    missing = clouds.missing_mie_files(mie_dir)
+    if missing:
+        raise ValueError(f"cloud_from_tau: Mie files missing in {mie_dir} (e.g. {missing[0]}); "
+                         "make them with python3 -m chelio_sim.make_mie_files")
+    lam, c_ext, _, _ = clouds.size_averaged_optics(mie_dir, float(params["cloud_r_mode"]), float(params["cloud_r_std_dev"]))
+    c_mean = clouds.planck_mean(lam, c_ext, float(params["internal_temp"]))
+
+    p_bot_bar = float(params["cloud_pbot_bar"])
+    p_bot = p_bot_bar * 1e6
+    params["cloud_bottom_pressure"] = p_bot
+    params["cloud_bottom_mixing_ratio"] = clouds.f_bot_for_tau(
+        tau, p_bot, float(params["cloud_to_gas_scale_height_ratio"]), c_mean, mu=clouds.MU_DEFAULT, g=_config_gravity()
+    )
+    stem = mie_dir.name.replace("_", "")
+    params["cloud_name"] = f"{stem}_pbot={_format_e_num(p_bot_bar)}_tau={tau:g}"
+
+
 DERIVE_HOOKS = {
     "c_plus_o_abundances": c_plus_o_abundances,
     "cia_pair_mixing": cia_pair_mixing,
+    "cloud_from_tau": cloud_from_tau,
     "early_mars_mixing": early_mars_mixing,
 }

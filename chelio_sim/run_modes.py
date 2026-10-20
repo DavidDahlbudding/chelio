@@ -14,7 +14,14 @@ Three switches in `simulation_params` decide what a run does:
                             composition held fixed, i.e. without GGchem, written to
                             <out_dir>/<name>_outgassed/:
                             "none", "also" (before the coupled run) or "only" (no coupled run).
+
+Also the cloud deck settings of run_coupled.py (CLOUD_PARAMS, resolve_clouds -> HELIOS cloud flags).
 """
+
+import os
+from pathlib import Path
+
+from chelio_sim import clouds
 
 CHEMISTRY_MODES = ("equilibrium", "constant")
 ABUNDANCE_SOURCES = ("manual", "outgas")
@@ -41,6 +48,17 @@ SIM_PARAMS = (
     "a_o",
     "a_n",
 )
+
+# Cloud deck `simulation_params` (numeric --<param> CLI overrides), plus the string --cloud_mie_path.
+# run_coupled.py only (kept out of SIM_PARAMS, which run_fast.py shares: the fast RT has no clouds).
+CLOUD_PARAMS = (
+    "cloud_r_mode",
+    "cloud_r_std_dev",
+    "cloud_bottom_pressure",
+    "cloud_bottom_mixing_ratio",
+    "cloud_to_gas_scale_height_ratio",
+)
+CLOUD_PATH_PARAM = "cloud_mie_path"
 
 # VMR given to H2O in constant chemistry if constant_mixing_ratios does not list it (too low to matter or to be
 # topped up by create_constant_mixfile; HELIOS always gets H2O as an active species)
@@ -86,6 +104,94 @@ def add_mode_arguments(parser):
         help="Species HELIOS loads opacities for: 'auto' (from the composition) or comma-separated species of "
              "helios_inputs/all_species.dat, e.g. 'H2O,CO2,CH4,H2'. CIA pairs follow automatically. Overrides config.",
     )
+
+
+def add_cloud_arguments(parser):
+    """CLI overrides of the cloud deck settings (run_coupled.py)."""
+    parser.add_argument(
+        f"--{CLOUD_PATH_PARAM}",
+        default=None,
+        help="Directory with the HELIOS Mie files r{:.6f}.dat (absolute or relative to the Chelio root), "
+             "made with python3 -m chelio_sim.make_mie_files. Overrides config.",
+    )
+    for param in CLOUD_PARAMS:
+        parser.add_argument(f"--{param}", type=float, default=None, help=f"Override {param} from config (cloud deck).")
+
+
+def apply_cloud_overrides(sim_p, args):
+    """Copies the cloud CLI overrides that were given into `sim_p` (config simulation_params)."""
+    for key in (CLOUD_PATH_PARAM, *CLOUD_PARAMS):
+        if getattr(args, key, None) is not None:
+            sim_p[key] = getattr(args, key)
+
+
+def resolve_clouds(params, p_boa=None, p_toa=None, chelio_path=None):
+    """
+    HELIOS cloud flags (names without the leading '-') for the cloud settings in `params` (simulation_params):
+    {"number_of_cloud_decks": 0} without a cloud (cloud_bottom_mixing_ratio 0 or unset), otherwise one deck in
+    HELIOS' `manual` mode (f = f_bot (p / p_bot)^(1/h - 1) above the base).
+
+    Raises ValueError (with an explanation) if a cloud is requested that cannot work. The cloud base is only
+    checked against the atmosphere if p_boa and p_toa [dyn/cm^2] are given; pass the actual BOA pressure
+    (which may come from outgassing).
+    """
+    f_bot = float(params.get("cloud_bottom_mixing_ratio") or 0.0)
+    if f_bot < 0:
+        raise ValueError(f"cloud_bottom_mixing_ratio must be >= 0 (0 = no cloud), got {f_bot:g}.")
+    if f_bot == 0:
+        return {"number_of_cloud_decks": 0}
+    if f_bot >= 1:
+        raise ValueError(
+            f"cloud_bottom_mixing_ratio is the number of cloud particles per gas molecule (typically ~1e-20), got {f_bot:g}."
+        )
+
+    mie_path = params.get(CLOUD_PATH_PARAM)
+    if not mie_path:
+        raise ValueError(
+            "a cloud deck (cloud_bottom_mixing_ratio > 0) needs `cloud_mie_path`, a directory with the HELIOS Mie files "
+            "(make them with: python3 -m chelio_sim.make_mie_files --ri <refractive index file> --out <dir>)."
+        )
+    root = chelio_path or os.environ.get("CHELIO_PATH") or Path(__file__).resolve().parent.parent
+    mie_dir = os.path.abspath(os.path.join(root, os.path.expanduser(str(mie_path))))  # join keeps absolute paths
+    # HELIOS concatenates directory and file name, so the directory needs the trailing "/"
+    mie_dir = os.path.join(mie_dir, "")
+    if not os.path.isdir(mie_dir):
+        raise ValueError(f"cloud_mie_path {mie_dir} does not exist. Make the Mie files with python3 -m chelio_sim.make_mie_files.")
+    missing = clouds.missing_mie_files(mie_dir)
+    if missing:
+        raise ValueError(
+            f"{len(missing)} of the {len(clouds.HELIOS_RADII)} Mie files HELIOS needs are missing in {mie_dir} "
+            f"(e.g. {missing[0]}). HELIOS reads one file per radius r = 10**np.arange(-2, 3.1, 0.1) micron, "
+            "named 'r{:.6f}.dat'.format(r); make them with python3 -m chelio_sim.make_mie_files."
+        )
+
+    r_mode = float(params["cloud_r_mode"])
+    sigma = float(params["cloud_r_std_dev"])
+    p_bot = float(params["cloud_bottom_pressure"])
+    h = float(params["cloud_to_gas_scale_height_ratio"])
+    if r_mode <= 0:
+        raise ValueError(f"cloud_r_mode must be > 0 micron, got {r_mode:g}.")
+    if sigma <= 1:
+        raise ValueError(f"cloud_r_std_dev (geometric standard deviation of the lognormal) must be > 1, got {sigma:g}.")
+    if h <= 0:
+        raise ValueError(f"cloud_to_gas_scale_height_ratio must be > 0, got {h:g}.")
+    if p_boa is not None and p_toa is not None and not float(p_toa) < p_bot < float(p_boa):
+        raise ValueError(
+            f"cloud_bottom_pressure {p_bot:g} dyn/cm^2 is outside the atmosphere (TOA {float(p_toa):g}, "
+            f"BOA {float(p_boa):g} dyn/cm^2). HELIOS would not find the cloud base and would fill every layer "
+            "above the lowest one with cloud."
+        )
+
+    return {
+        "number_of_cloud_decks": 1,
+        "path_to_mie_files": mie_dir,
+        "aerosol_radius_mode": r_mode,
+        "aerosol_radius_geometric_std_dev": sigma,
+        "cloud_mixing_ratio": "manual",
+        "cloud_bottom_pressure": p_bot,
+        "cloud_bottom_mixing_ratio": f_bot,
+        "cloud_to_gas_scale_height_ratio": h,
+    }
 
 
 def parse_mixing_ratios(text):

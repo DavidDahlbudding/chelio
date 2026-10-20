@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import re
@@ -11,6 +12,7 @@ import numpy as np
 
 # Import the refactored modules
 from chelio_sim import abundances, external_runners, init_pt, mixfile_utils, run_modes
+from chelio_sim import clouds as cloud_utils
 from chelio_sim import species as species_utils
 
 
@@ -68,6 +70,60 @@ def expand_env_vars(config):
     return config
 
 
+def setup_clouds(sim_p, boa_p, chelio_path, run_dir, config, helios_param_file, log):
+    """
+    HELIOS cloud flags (run_modes.resolve_clouds) for a run with BOA pressure boa_p [dyn/cm^2]. Exits if the cloud
+    cannot work. Logs one "Clouds: ..." line and, with a cloud deck, writes cloud_settings.json to run_dir.
+    """
+    try:
+        flags = run_modes.resolve_clouds(sim_p, p_boa=boa_p, p_toa=float(sim_p["toa_pressure"]), chelio_path=chelio_path)
+    except ValueError as e:
+        log.error(f"Error: {e}")
+        sys.exit(1)
+    if flags["number_of_cloud_decks"] == 0:
+        log.info("Clouds: none")
+        return flags
+
+    mie_dir = flags["path_to_mie_files"]
+    r_mode, sigma = flags["aerosol_radius_mode"], flags["aerosol_radius_geometric_std_dev"]
+    p_bot, f_bot, h = flags["cloud_bottom_pressure"], flags["cloud_bottom_mixing_ratio"], flags["cloud_to_gas_scale_height_ratio"]
+    # Nominal optical depth: Planck mean of the size-averaged C_ext at T_int (as the grid hook cloud_from_tau)
+    T_ref = float(sim_p["internal_temp"])
+    lam, c_ext, _, _ = cloud_utils.size_averaged_optics(mie_dir, r_mode, sigma)
+    c_mean = cloud_utils.planck_mean(lam, c_ext, T_ref)
+    mu, gravity = cloud_utils.MU_DEFAULT, float(config["planet_params"]["g"])
+    tau = cloud_utils.tau_for_f_bot(f_bot, p_bot, h, c_mean, mu=mu, g=gravity)
+    log.info(
+        f"Clouds: 1 deck from {mie_dir}, r_mode = {r_mode:g} micron, sigma_g = {sigma:g}, base at {p_bot:g} dyn/cm^2 "
+        f"({p_bot / 1e6:g} bar), f_bot = {f_bot:.4g}, h = {h:g} -> tau = {tau:.3g} "
+        f"(Planck-mean C_ext = {c_mean:.3g} cm^2 at T_int = {T_ref:g} K, mu = {mu}, g = {gravity:g} cm/s^2)"
+    )
+    if cloud_utils.helios_param_value(helios_param_file, "planet =") == "manual":
+        helios_g = cloud_utils.helios_param_value(helios_param_file, "surface gravity")
+        if helios_g is not None and abs(float(helios_g) / gravity - 1) > 1e-3:
+            log.warning(
+                f"WARNING: HELIOS uses surface gravity {float(helios_g):g} cm/s^2 ({helios_param_file}), but tau was "
+                f"converted with planet_params.g = {gravity:g}; the cloud optical depth in HELIOS differs by that ratio."
+            )
+
+    settings = {
+        "f_bot": f_bot,
+        "tau_nominal": tau,
+        "c_ext_planck_mean_cm2": c_mean,
+        "planck_mean_temperature_K": T_ref,
+        "mu": mu,
+        "gravity_cm_s2": gravity,
+        "cloud_to_gas_scale_height_ratio": h,
+        "cloud_bottom_pressure_dyn_cm2": p_bot,
+        "r_mode_micron": r_mode,
+        "sigma_g": sigma,
+        "mie_path": mie_dir,
+    }
+    with open(os.path.join(run_dir, "cloud_settings.json"), "w") as f:
+        json.dump(settings, f, indent=2)
+    return flags
+
+
 def main():
     # 1. PARSE ARGUMENTS
     parser = argparse.ArgumentParser(
@@ -81,6 +137,7 @@ def main():
     )
     parser.add_argument("--out_dir", default="output", help="Root output directory.")
     run_modes.add_mode_arguments(parser)
+    run_modes.add_cloud_arguments(parser)
     parser.add_argument(
         "--constant_mixing_ratios",
         type=str,
@@ -125,6 +182,7 @@ def main():
     for param in sim_params:
         if getattr(args, param) is not None:
             config["simulation_params"][param] = getattr(args, param)
+    run_modes.apply_cloud_overrides(config["simulation_params"], args)
     
     # Apply run-mode overrides; stop on combinations that make no sense, collect warnings for ignored settings
     try:
@@ -152,6 +210,13 @@ def main():
     ):
         print("Error: Please set GGCHEM_PATH and HELIOS_PATH environment variables,")
         print("       or specify the paths directly in config.yaml.")
+        sys.exit(1)
+
+    # Clouds: check the Mie files before anything runs (the cloud base is checked once the BOA pressure is known)
+    try:
+        run_modes.resolve_clouds(config["simulation_params"], chelio_path=chelio_path)
+    except ValueError as e:
+        print(f"Error: {e}")
         sys.exit(1)
 
     if args.out_dir[-1] != "/":
@@ -240,6 +305,7 @@ def main():
                 sys.exit(1)
 
             log.info(f"P_BOA ({boa_p}) is within the range of {min_boa_pressure} to {max_boa_pressure} dyn/cm^2.")
+            cloud_flags_outgassed = setup_clouds(sim_p, boa_p, chelio_path, run_output_dir_outgassed, config, helios_param_file, log)
 
             log.info("Running HELIOS with outgassed molecular species...")
             helios_params_outgas = {
@@ -256,6 +322,7 @@ def main():
                 "write_tp_profile_during_run": 30000,
                 "maximum_number_of_iterations": 30001,
                 "radiative_equilibrium_criterion": config["coupling"]["rad_eq_criterion"],
+                "clouds": cloud_flags_outgassed,
             }
             external_runners.run_helios(helios_path, helios_params_outgas)
         elif uncoupled_outgassed_run == "also":
@@ -428,6 +495,9 @@ def main():
                     log.error(f"Initial T-P profile file not found: {os.path.join(run_output_dir, f'{args.name}_tp_coupling_{i_min-1}.dat')}")
                     sys.exit(1)
         
+        # --- Clouds (HELIOS flags, checked against the actual BOA pressure) ---
+        cloud_flags = setup_clouds(sim_p, boa_p, chelio_path, run_output_dir, config, helios_param_file, log)
+
         # --- Active species (HELIOS species file, mixfile columns) ---
         active_species, species_file = species_utils.setup_species_file(sim_p, run_output_dir, outgassed_vmrs)
 
@@ -501,6 +571,7 @@ def main():
                 "write_tp_profile_during_run": max_iter,
                 "maximum_number_of_iterations": max_iter + 1,
                 "radiative_equilibrium_criterion": config["coupling"]["rad_eq_criterion"],
+                "clouds": cloud_flags,
             }
             external_runners.run_helios(helios_path, helios_params)
 

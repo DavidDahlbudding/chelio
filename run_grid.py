@@ -4,8 +4,8 @@ Run a grid of Chelio simulations defined in a grid file (see grids/README.md), o
 
     python run_grid.py grids/n2dom.yaml --dry-run
     python run_grid.py grids/cia_comparison.yaml --only cia_pair=N2-CH4,CO2-CO2
-    python run_grid.py --list-cia-sources
-    python run_grid.py --restore-cia-defaults
+    python run_grid.py --list-cia-sources [hitran_cia_new]
+    python run_grid.py --restore-cia-defaults [hitran_cia_new]
 
 Runs share input files (see CLAUDE.md), so there is deliberately no parallel mode.
 """
@@ -23,12 +23,13 @@ from tqdm import tqdm
 from chelio_sim import grid
 
 
-def list_cia_sources():
-    print("Available CIA sources by pair (* = default):")
-    for pair, sources in groupby(grid.discover_cia_sources(), key=grid.cia_pair):
-        print(f"\n{pair} [default: {grid.DEFAULT_CIA_SOURCES.get(pair, 'N/A')}]:")
+def list_cia_sources(source_dir):
+    print(f"CIA sources in {grid.cia_source_dir(source_dir)} by pair (* = default):")
+    for pair, sources in groupby(grid.discover_cia_sources(source_dir), key=grid.cia_pair):
+        default = grid.default_cia_source(pair, source_dir)
+        print(f"\n{pair} [default: {default or 'N/A'}]:")
         for source in sources:
-            marker = " *" if source == grid.DEFAULT_CIA_SOURCES.get(pair) else ""
+            marker = " *" if source == default else ""
             print(f"  - {source}{marker}")
 
 
@@ -50,16 +51,27 @@ def main():
         help="Only run tasks whose parameter KEY has one of the values (repeatable, e.g. --only cia_pair=N2-CH4 --only internal_temp=100).",
     )
     parser.add_argument("--verbose", action="store_true", help="Show the output of each run instead of capturing it.")
-    parser.add_argument("--list-cia-sources", action="store_true", help="List the CIA sources in hitran_cia/ and exit.")
-    parser.add_argument("--restore-cia-defaults", action="store_true", help="Copy the default CIA sources into r50_kdistr and exit.")
+    parser.add_argument(
+        "--list-cia-sources", nargs="?", const=grid.CIA_SOURCE_DIR, metavar="FOLDER",
+        help=f"List the CIA sources in $HELIOS_PATH/input/opacity/FOLDER (default {grid.CIA_SOURCE_DIR}) and exit.",
+    )
+    parser.add_argument(
+        "--restore-cia-defaults", nargs="?", const=grid.CIA_SOURCE_DIR, metavar="FOLDER",
+        help=f"Copy the default CIA sources from $HELIOS_PATH/input/opacity/FOLDER (default {grid.CIA_SOURCE_DIR}; "
+             "e.g. hitran_cia_new, hitran_cia_legacy) into r50_kdistr and exit.",
+    )
     args = parser.parse_args()
 
-    if args.list_cia_sources:
-        list_cia_sources()
-        return
-    if args.restore_cia_defaults:
-        grid.restore_default_cia()
-        return
+    try:
+        if args.list_cia_sources:
+            list_cia_sources(args.list_cia_sources)
+            return
+        if args.restore_cia_defaults:
+            grid.restore_default_cia(source_dir=args.restore_cia_defaults)
+            return
+    except (FileNotFoundError, RuntimeError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
     if not args.grid_file:
         parser.error("a grid file is required")
 

@@ -87,6 +87,14 @@ def run_helios(helios_path, params):
         command.extend(["-kappa_file_path", params['kappa_file_path']])
     if 'started_convection' in params:
          command.extend(["-started_convection", str(params['started_convection'])])
+    # Cloud flags from run_modes.resolve_clouds. -number_of_cloud_decks is always passed, so the cloud section
+    # of param.dat can never switch clouds on by accident.
+    cloud_flags = params.get('clouds') or {}
+    command.extend(["-number_of_cloud_decks", str(cloud_flags.get('number_of_cloud_decks', 0))])
+    if cloud_flags.get('number_of_cloud_decks', 0) > 0:
+        for key, value in cloud_flags.items():
+            if key != 'number_of_cloud_decks':
+                command.extend([f"-{key}", str(value)])
 
     run_command(command, cwd=helios_path)
 
