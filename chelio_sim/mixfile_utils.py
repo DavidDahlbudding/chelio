@@ -632,6 +632,24 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_mi
         raise
 
 
+def relax_with_previous_mixfile(new_data, new_header, prev_mixfile_path):
+    """
+    Coupling speed-up: average mu (linearly) and the VMRs (in log10) of a new mixfile table with the
+    previous iteration's mixfile, in place. Columns 5: of new_data are the species new_header[5:].
+    Layers where either VMR is 0 keep the new value. Returns False (new_data unchanged) if the
+    previous mixfile has other species or another number of layers.
+    """
+    _, mu_prev, species_prev, vmr_prev = parse_mixfile(prev_mixfile_path)
+    species_new = [str(s) for s in new_header[5:]]
+    if set(species_prev) != set(species_new) or len(mu_prev) != len(new_data):
+        return False
+    new_data[:, 3] = (new_data[:, 3] + mu_prev) / 2.0
+    for col, s in enumerate(species_new, start=5):
+        both = (new_data[:, col] > 0) & (vmr_prev[s] > 0)
+        new_data[both, col] = 10 ** ((np.log10(new_data[both, col]) + np.log10(vmr_prev[s][both])) / 2.0)
+    return True
+
+
 def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max, species, ref_pt=os.path.join(os.environ["GGCHEM_PATH"], "structures", "pt_helios.in"), coupling_speed_up=False, delad_table_path=DEFAULT_DELAD_TABLE_PATH):
     """
     Converts GGchem output (Static_Conc.dat) to a HELIOS mixfile.
@@ -749,16 +767,8 @@ def convert_ggchem_to_helios(ggchem_output_path, helios_mixfile_path, t_min_max,
                 prev_num_str = str(int(num_str) - 1)
                 prev_helios_mixfile_path = f"{prefix}_{prev_num_str}{ext}"
                 if os.path.exists(prev_helios_mixfile_path):
-                    p_prev, mu_prev, species_prev, vmr_prev = parse_mixfile(prev_helios_mixfile_path)
-                    # Check if species_prev matches species_list
-                    if set(species_prev) == set(species):
-                        # average mu and (log) vmr with previous mixfile
-                        new_data[:, 3] = (new_data[:, 3] + mu_prev) / 2.0
-                        for s in species:
-                            idx_new = species.index(s)
-                            zero_mask = vmr_prev[s] != 0
-                            new_data[~zero_mask, 5 + idx_new] = 10**(np.log10(new_data[~zero_mask, 5 + idx_new]) + np.log10(vmr_prev[s][~zero_mask]) / 2.0)
-                            new_data[zero_mask, 5 + idx_new] = new_data[zero_mask, 5 + idx_new]
+                    if not relax_with_previous_mixfile(new_data, new_header, prev_helios_mixfile_path):
+                        log.warning(f"Previous mixfile '{prev_helios_mixfile_path}' has other species or layers, no speed-up averaging.")
                 else:
                     log.warning(f"Previous mixfile '{prev_helios_mixfile_path}' not found for speed-up. Generating new mixfile.")
             else:
