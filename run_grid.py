@@ -16,6 +16,7 @@ import os
 import shlex
 import shutil
 import sys
+import time
 from itertools import groupby
 
 from tqdm import tqdm
@@ -78,7 +79,7 @@ def main():
     try:
         spec = grid.load_grid(args.grid_file)
         tasks = grid.order_tasks(spec, grid.filter_tasks(grid.expand_tasks(spec), args.only))
-        if spec.get("warm_start") and tasks:
+        if grid.warm_start_axis(spec) and tasks:
             grid.check_warm_start(spec, tasks[0])
     except (ValueError, RuntimeError, FileNotFoundError) as e:
         print(f"Error: {e}")
@@ -87,14 +88,17 @@ def main():
     print(f"Grid file: {args.grid_file}")
     print(f"Runner: {grid.RUNNER_SCRIPTS[spec['runner']]}, output directory: {spec['out_dir']}")
     print(f"Labels (not passed to the runner): {', '.join(grid.label_keys(spec, tasks)) or '-'}")
-    if spec.get("warm_start"):
-        print(f"Warm start from the next-higher {spec['warm_start']} run in {spec['out_dir']}")
+    if grid.warm_start_axis(spec):
+        print(f"Warm start from the next-higher {grid.warm_start_axis(spec)} run in {spec['out_dir']}")
     print(f"Total number of simulations: {len(tasks)}\n")
 
     if args.dry_run:
         for task in tasks:
             print(task.name)
-            print(f"    {shlex.join(grid.build_command(spec, task)[1:])}")
+            if spec["runner"] == "session":
+                print(f"    {task.params}")
+            else:
+                print(f"    {shlex.join(grid.build_command(spec, task)[1:])}")
         return
     if not tasks:
         return
@@ -110,21 +114,45 @@ def main():
         grid.restore_default_cia()
 
     status_names = {"done": [], "skipped": [], "failed": []}
+    timing_path = out_dir / "grid_timings.csv"
+    if not timing_path.exists():
+        timing_path.write_text("name,status,wall_time_s,finished\n")
+    session_runner = None
+    if spec["runner"] == "session":
+        from chelio_sim.session_runner import SessionGridRunner
+        session_runner = SessionGridRunner(spec, tasks, report=tqdm.write)
+        print(f"Session settings: {session_runner.settings}\n")
+    warm_axis = grid.warm_start_axis(spec)
     with tqdm(total=len(tasks), desc="Simulations") as bar:
         for source, group in groupby(tasks, key=lambda task: task.params.get("cia")):
             with grid.swapped_cia(source) if source else contextlib.nullcontext():
                 for task in group:
-                    init_pt_file = grid.find_warm_start(spec, task) if spec.get("warm_start") else None
-                    if spec.get("warm_start"):
-                        bar.write(f"Warm start for {task.name}: {init_pt_file or 'none found'}")
-                    cmd = grid.build_command(spec, task, init_pt_file)
-                    status, result = grid.run_task(cmd, verbose=args.verbose)
-                    status_names[status].append(task.name)
-                    if status == "failed":
-                        log_failure(failure_log, task, cmd, result)
-                        bar.write(f"FAILED (exit code {result.returncode}): {task.name}, see {failure_log} and the run's run.log")
+                    t_start = time.time()
+                    if session_runner is not None:
+                        status, result = session_runner.run(task)
+                        if status == "failed":
+                            with open(failure_log, "a") as f:
+                                f.write(f"--- FAILED: {task.name} ({datetime.datetime.now():%Y-%m-%d %H:%M:%S}, session) ---\n{result!r}\n\n")
+                            bar.write(f"FAILED: {task.name}: {result!r}, see {failure_log} and the run's run.log")
+                        elif status == "done":
+                            bar.write(f"DONE: {task.name} (converged: {result['converged']}, warm start: {result['warm_start'] or 'no'}, "
+                                      f"iterations rad/conv: {result['rad_iter']}/{result['conv_iter']}, {result['t_total_s']:.0f} s)")
+                        else:
+                            bar.write(f"SKIPPED: {task.name}")
                     else:
-                        bar.write(f"{status.upper()}: {task.name}")
+                        init_pt_file = grid.find_warm_start(spec, task) if warm_axis else None
+                        if warm_axis:
+                            bar.write(f"Warm start for {task.name}: {init_pt_file or 'none found'}")
+                        cmd = grid.build_command(spec, task, init_pt_file)
+                        status, result = grid.run_task(cmd, verbose=args.verbose)
+                        if status == "failed":
+                            log_failure(failure_log, task, cmd, result)
+                            bar.write(f"FAILED (exit code {result.returncode}): {task.name}, see {failure_log} and the run's run.log")
+                        else:
+                            bar.write(f"{status.upper()}: {task.name}")
+                    status_names[status].append(task.name)
+                    with open(timing_path, "a") as f:
+                        f.write(f"{task.name},{status},{time.time() - t_start:.1f},{datetime.datetime.now():%Y-%m-%dT%H:%M:%S}\n")
                     bar.update()
 
     print("\n--- Grid complete ---")

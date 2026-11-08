@@ -4,7 +4,9 @@ run_coupled.py / run_fast.py and provides the helpers to run them one after anot
 
 Grid file keys (see grids/README.md for the full description and grids/*.yaml for examples):
 
-  runner        "coupled" (run_coupled.py, default) or "fast" (run_fast.py)
+  runner        "coupled" (run_coupled.py, default), "fast" (run_fast.py) or "session" (one HELIOS run per grid
+                point with chemistry from a pre-computed grid, all in one in-process HeliosSession;
+                chelio_sim/session_runner.py)
   out_dir       root output directory of the runs
   name          run name template, a Python format string over the run parameters
   config        optional base config file (default: the runner's config.yaml)
@@ -16,7 +18,10 @@ Grid file keys (see grids/README.md for the full description and grids/*.yaml fo
                 inside a block are crossed as well
   derive        optional list of hook names (DERIVE_HOOKS) that compute further parameters
   warm_start    optional parameter name: start each run from the last T-P profile of the existing
-                run in out_dir that has the next-higher value of this parameter (rest of name equal)
+                run in out_dir that has the next-higher value of this parameter (rest of name equal).
+                runner session: also "previous", "nearest" or "none" (session_runner.choose_warm_start)
+  session       runner session only: settings of session_runner.SESSION_DEFAULTS (chemistry grid spacing,
+                iteration limits, stitching, warm_start, init_from)
 
 Parameters that the runner accepts as a CLI flag are passed as --<key> <value>, all others are
 labels that are only used in the name, for --only filters and by derive hooks.
@@ -43,14 +48,18 @@ from chelio_sim import run_modes
 
 CHELIO_ROOT = Path(__file__).resolve().parent.parent
 
-RUNNER_SCRIPTS = {"coupled": "run_coupled.py", "fast": "run_fast.py"}
+RUNNER_SCRIPTS = {"coupled": "run_coupled.py", "fast": "run_fast.py", "session": "chelio_sim/session_runner.py (in-process)"}
 _MODE_KEYS = ("chemistry", "outgas_or_manual", "uncoupled_outgassed_run", "active_species")
 RUNNER_FLAGS = {
     "coupled": {*run_modes.SIM_PARAMS, *_MODE_KEYS, "constant_mixing_ratios", "relative_humidity", "init_pt_file", "helios_param_file",
                 *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM},
     "fast": {*run_modes.SIM_PARAMS, *_MODE_KEYS, "constant_mixing_ratios"},
+    "session": {*run_modes.SIM_PARAMS, "chemistry", "outgas_or_manual", "active_species", "constant_mixing_ratios",
+                "relative_humidity", "helios_param_file", *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM},
 }
-SPEC_KEYS = {"runner", "out_dir", "name", "config", "helios_param", "fixed", "grid", "cases", "derive", "warm_start"}
+# warm_start values of runner session that are modes, not a parameter name
+SESSION_WARM_START_MODES = ("none", "previous", "nearest")
+SPEC_KEYS = {"runner", "out_dir", "name", "config", "helios_param", "fixed", "grid", "cases", "derive", "warm_start", "session"}
 
 # Folder in $HELIOS_PATH/input/opacity/ with the CIA sources of CIA grids (`cia` key)
 CIA_SOURCE_DIR = "hitran_cia"
@@ -119,12 +128,29 @@ def load_grid(path):
         both = set(case) & set(spec["grid"])
         if both:
             raise ValueError(f"{sorted(both)} set in both `grid` and `cases`")
-    if spec["runner"] != "coupled":
+    if spec["runner"] == "fast":
         if spec.get("helios_param"):
-            raise ValueError("helios_param only works with runner: coupled")
+            raise ValueError("helios_param only works with runner: coupled or session")
         if spec.get("warm_start"):
-            raise ValueError("warm_start only works with runner: coupled (run_fast.py has no --init_pt_file)")
+            raise ValueError("warm_start only works with runner: coupled or session (run_fast.py has no --init_pt_file)")
+    if spec.get("session") is not None and spec["runner"] != "session":
+        raise ValueError("`session` settings only work with runner: session")
+    if spec["runner"] == "session":
+        from chelio_sim.session_runner import SESSION_DEFAULTS  # noqa: deferred, needs the env vars
+        unknown = set(spec.get("session") or {}) - set(SESSION_DEFAULTS)
+        if unknown:
+            raise ValueError(f"unknown session settings {sorted(unknown)}; allowed: {sorted(SESSION_DEFAULTS)}")
     return spec
+
+
+def warm_start_axis(spec):
+    """The warm_start parameter (next-higher value), or None (no warm start or a session mode)."""
+    value = spec.get("warm_start")
+    if spec["runner"] == "session":
+        value = (spec.get("session") or {}).get("warm_start", value)
+        if value in SESSION_WARM_START_MODES or value in (None, False):
+            return None
+    return value or None
 
 
 # --- Expanding the grid into runs ---
@@ -217,7 +243,7 @@ def order_tasks(spec, tasks):
     groups = {}
     for task in tasks:
         groups.setdefault(task.params.get("cia"), []).append(task)
-    axis = spec.get("warm_start")
+    axis = warm_start_axis(spec)
     if axis:
         for group in groups.values():
             group.sort(key=lambda task: -float(task.params[axis]))
@@ -263,7 +289,7 @@ class _Wildcard:
 
 
 def check_warm_start(spec, task):
-    axis = spec["warm_start"]
+    axis = warm_start_axis(spec)
     if axis not in task.params:
         raise ValueError(f"warm_start parameter {axis!r} is not a parameter of the runs")
     if _Wildcard.token not in format_name(spec["name"], {**task.params, axis: _Wildcard()}):

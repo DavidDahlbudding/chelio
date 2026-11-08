@@ -213,6 +213,8 @@ def plot_tp(tasks, results, reference, path):
     colors = tau_colors({float(t.params["cloud_tau"]) for t in cloudy})
     base = next((results[t.name] for t in tasks if float(t.params.get("cloud_tau", 0)) == 0), None)
     fig, axes = plt.subplots(1, len(p_bots), figsize=(4.2 * len(p_bots), 5), sharey=True, squeeze=False)
+    minT = min((np.nanmin(res["T"]) for res in results.values() if res is not None), default=0)
+    maxT = max((np.nanmax(res["T"]) for res in results.values() if res is not None), default=0)
     for ax, p_bot in zip(axes[0], p_bots):
         if reference is not None:
             ax.plot(reference["T"], reference["p"], color="0.6", ls=":", lw=1.5, label="published (Zenodo)")
@@ -229,6 +231,7 @@ def plot_tp(tasks, results, reference, path):
             if np.isfinite(res["p_rcb"]):
                 ax.plot(np.interp(np.log10(res["p_rcb"]), np.log10(res["p"][::-1]), res["T"][::-1]), res["p_rcb"], "o", color=colors[tau], ms=5)
         ax.axhline(p_bot, color="C3", ls="--", lw=1, label="cloud base")
+        ax.set_xlim(50, 1.05 * maxT)
         ax.set_yscale("log")
         ax.set_title(f"cloud base {p_bot:g} bar")
         ax.set_xlabel("T [K]")

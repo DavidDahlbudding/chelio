@@ -1,0 +1,22 @@
+# Test 4: as 2, but every run starts from the converged Test 2a run of the same T_int (should converge almost at once).
+runner: session
+out_dir: output/session_tests/t4_grid_init
+name: "Tint={internal_temp}"
+session:
+  chem_dT: 50
+  chem_p_spacing: opacity
+  init_from: output/session_tests/t2a_grid_cold
+
+fixed:
+  outgas_or_manual: manual
+  chemistry: equilibrium
+  toa_pressure: 1.0e-1      # dyn/cm^2 (= 1e-7 bar)
+  surface_pressure: 1.0e7   # dyn/cm^2 (= 10 bar)
+  CplusO: 1.0e-2
+  CtoO: 0.59
+  X_N: 1.0e-4
+
+grid:
+  internal_temp: [200, 175, 150, 125, 100, 75, 50]   # K, decreasing (the order of the runs)
+
+derive: [c_plus_o_abundances]

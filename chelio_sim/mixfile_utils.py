@@ -465,30 +465,33 @@ def append_profiles(header, data, ref_pt=os.path.join(os.environ["GGCHEM_PATH"],
     return missing_data
 
 
-def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_min_max, relative_humidity=1.0, coupling_speed_up=False, delad_table_path=DEFAULT_DELAD_TABLE_PATH):
+def cap_vmrs_by_saturation(p_bar, T_k, species_list, base_vmr, relative_humidity=1.0, uncapped=()):
     """
-    Creates a HELIOS mixfile with constant mixing ratios, limited by condensation.
+    VMRs capped by saturation (p_sat(T)/P) at each point, the missing gas redistributed proportionally over the
+    species that are not capped (as used by create_constant_mixfile).
 
     Args:
-        p_bar (np.ndarray): Pressure grid in bar
-        T_k (np.ndarray): Temperature grid in K
-        mixing_ratios (dict): Species name -> constant mixing ratio
-                              (e.g., {"H2O": 0.01, "CO2": 0.001, "N2": 0.989})
-        helios_mixfile_path (str): Output path
-        relative_humidity (float): Fractional relative humidity applied to H2O saturation cap
-                                   (e.g., 0.8 means H2O VMR <= 0.8 * p_sat(T)/P). Default: 1.0.
-        delad_table_path (str): Path of the kappa/delad table (overwritten on every call).
+        p_bar, T_k (np.ndarray): pressure [bar] and temperature [K] of the points (1D, same length)
+        species_list (list): species names
+        base_vmr: VMRs before capping, shape (n_species,) (same for every point) or (n_points, n_species);
+                  renormalised to 1 per point
+        relative_humidity (float): factor on the H2O saturation cap
+        uncapped (tuple): species that are never capped (e.g. ("H2",))
+
+    Returns:
+        np.ndarray of shape (n_points, n_species)
     """
-    log.info(f"Creating constant-VMR mixfile at '{helios_mixfile_path}'")
-    
-    species_list = list(mixing_ratios.keys())
+    p_bar = np.asarray(p_bar, dtype=float)
+    T_k = np.asarray(T_k, dtype=float)
     n_layers = len(p_bar)
     n_species = len(species_list)
-    
+
     # 1. Pre-calculate Saturation Limits (Vectorized)
     # Shape: (n_layers, n_species)
     max_vmr = np.full((n_layers, n_species), np.inf)
     for i, s in enumerate(species_list):
+        if s in uncapped:
+            continue
         psat = p_sat(T_k, s) # dyn/cm2
         if not np.all(np.isnan(psat)):
             # Convert dyn/cm2 to bar: 1 bar = 1e6 dyn/cm2
@@ -496,8 +499,9 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_mi
             max_vmr[:, i] = rh_factor * (psat * 1e-6) / p_bar
 
     # 2. Initial VMRs (normalized)
-    vmr = np.array([mixing_ratios[s] for s in species_list])
-    vmr = np.tile(vmr, (n_layers, 1))
+    vmr = np.array(base_vmr, dtype=float)
+    if vmr.ndim == 1:
+        vmr = np.tile(vmr, (n_layers, 1))
     vmr /= vmr.sum(axis=1, keepdims=True)
 
     # 3. Iterative Adjustment
@@ -538,6 +542,29 @@ def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_mi
 
         if np.allclose((vmr-prev_vmr), 0.0, atol=1e-12):
             break
+
+    return vmr
+
+
+def create_constant_mixfile(p_bar, T_k, mixing_ratios, helios_mixfile_path, t_min_max, relative_humidity=1.0, coupling_speed_up=False, delad_table_path=DEFAULT_DELAD_TABLE_PATH):
+    """
+    Creates a HELIOS mixfile with constant mixing ratios, limited by condensation.
+
+    Args:
+        p_bar (np.ndarray): Pressure grid in bar
+        T_k (np.ndarray): Temperature grid in K
+        mixing_ratios (dict): Species name -> constant mixing ratio
+                              (e.g., {"H2O": 0.01, "CO2": 0.001, "N2": 0.989})
+        helios_mixfile_path (str): Output path
+        relative_humidity (float): Fractional relative humidity applied to H2O saturation cap
+                                   (e.g., 0.8 means H2O VMR <= 0.8 * p_sat(T)/P). Default: 1.0.
+        delad_table_path (str): Path of the kappa/delad table (overwritten on every call).
+    """
+    log.info(f"Creating constant-VMR mixfile at '{helios_mixfile_path}'")
+    
+    species_list = list(mixing_ratios.keys())
+    n_layers = len(p_bar)
+    vmr = cap_vmrs_by_saturation(p_bar, T_k, species_list, [mixing_ratios[s] for s in species_list], relative_humidity=relative_humidity)
 
     # 4. Mean Molecular Weight Calculation
     # Using your renormalization approach:

@@ -27,7 +27,7 @@ To make a new grid, copy the closest file. Paths are relative to the Chelio root
 
 | Key | Meaning |
 |---|---|
-| `runner` | `coupled` (`run_coupled.py`, default) or `fast` (`run_fast.py`) |
+| `runner` | `coupled` (`run_coupled.py`, default), `fast` (`run_fast.py`) or `session` (one HELIOS run per grid point with the composition from a pre-computed chemistry grid, all runs in one in-process HELIOS session; see below) |
 | `out_dir` | root output directory, one subdirectory per run |
 | `name` | run name, a Python format string over the run parameters, e.g. `"Tint={internal_temp}K_{trace_pct:g}pct"` |
 | `config` | base config file (default: `config.yaml`) |
@@ -36,7 +36,8 @@ To make a new grid, copy the closest file. Paths are relative to the Chelio root
 | `grid` | parameter → list of values; every combination is run (first key varies slowest) |
 | `cases` | list of parameter blocks, each one crossed with `grid`. List values inside a block are crossed within the block |
 | `derive` | hooks from `chelio_sim/grid.py` (`DERIVE_HOOKS`) that compute more parameters per run: `cia_pair_mixing`, `early_mars_mixing`, `c_plus_o_abundances`, `cloud_from_tau` |
-| `warm_start` | parameter (e.g. `internal_temp`) that must appear in `name`. Each run starts from the last T-P profile of the existing run in `out_dir` with the next-higher value, and higher values are run first (coupled only) |
+| `warm_start` | parameter (e.g. `internal_temp`) that must appear in `name`. Each run starts from the last T-P profile of the existing run in `out_dir` with the next-higher value, and higher values are run first (coupled and session). Session runner only: also `previous` (last finished run of this invocation), `nearest` (finished run of this grid closest in the numeric run parameters) or `none` |
+| `session` | session runner settings (defaults in `chelio_sim/session_runner.py: SESSION_DEFAULTS`): `chem_dT`, `chem_t_min`, `chem_t_max`, `chem_p_spacing` (`opacity` = 1/3 dex, `layers` = HELIOS layer + interface pressures, or a number in dex), `chem_eqcond`, `max_iter`, `rad_max_iter`, `cold_start_temperature`, `min_conv_iter`, `stitch_flip_limit`, `stitch_flip_start`, `stitch_after_iter`, `stitch_surface`, `write_tp_every`, `warm_start`, `init_from` (directory with runs of the same names to start from) |
 
 A parameter that the runner accepts as a CLI flag (`internal_temp`, `surface_pressure`, `a_h`, `chemistry`, `constant_mixing_ratios`, `relative_humidity`, `active_species`, …) is passed as `--key value`. All other parameters are **labels**: they are only used in `name`, in `--only` filters and by hooks. The header printed by `run_grid.py` lists them, so check it for typos. `constant_mixing_ratios` can be written as a mapping (`{N2: 0.5, CH4: 0.5}`). `active_species` (default `auto`, see the main README) is written comma-separated, e.g. `active_species: "H2O,CO2,CH4,H2"`, since a YAML list would be read as several values to run.
 
@@ -47,3 +48,7 @@ Available in `name` in addition to the parameters: `psurf_bar` (= int(surface_pr
 **CIA sources:** the key `cia` takes a source from `$HELIOS_PATH/input/opacity/hitran_cia/` (file name without `.h5`), or `auto` for all of them. The runs of one source are grouped. The source is copied into `r50_kdistr/CIA_<pair>_opac_ip_kdistr.h5` before them and replaced by the default (`DEFAULT_CIA_SOURCES` in `chelio_sim/grid.py`) afterwards, also if the grid is interrupted. In CIA grids, `surface_pressure` values may also be `critical`: the lower critical pressure of the pair's two molecules (numbers are used as they are, e.g. `[1.0e6, critical]`).
 
 **Output:** runs that already finished are reported as skipped. A copy of the grid file is written to `<out_dir>/grid_<file>.yaml`, and the output of failed runs to `<out_dir>/grid_failures.log`.
+
+**Session runner** (`runner: session`): `run_grid.py` keeps one `HeliosSession` (`chelio_sim/helios_session.py`) for all runs, so HELIOS is imported, its kernels compiled and the opacity tables read once (and kept on the GPU if they fit). Each run is a single HELIOS run whose composition follows the temperature during the run, from a chemistry grid (`chelio_sim/chem_grid.py`): GGchem on a (T, P) grid with equilibrium condensation but **without rain-out** (`remove_condensates .false.`), or the saturation-capped constant mixing ratios of `chemistry: constant`. Grids are cached in `<out_dir>/chem_grids/` and reused by all runs with the same composition. Per run: `<name>_tp_coupling_0.dat` (final T-P), `<name>_restart.npz` (exact state for warm starts), `<name>_session.json` (convergence, iterations, timings, stitched layers, how often the profile left the chemistry grid), `vertical_mix_0.dat`, plus the HELIOS output. Finished runs (restart file + convergence flag 1) are skipped. `grids/session_tests/` + `slurm/session_tests.sbatch` compare it with the legacy coupling (`analyze/compare_session_tests.py`).
+
+`run_grid.py` writes `<out_dir>/grid_timings.csv` (wall time per run) for all runners.

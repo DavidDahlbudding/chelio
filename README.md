@@ -168,6 +168,22 @@ for T in 100 200 300; do
 done
 ```
 
+### Pre-computed Chemistry and HELIOS Sessions (`runner: session`)
+
+Instead of iterating HELIOS and GGchem, a grid file with `runner: session` runs **one** HELIOS model per grid point whose composition follows the temperature during the run, interpolated (log VMR, bilinear in T and log P) from a chemistry grid that is computed once per composition and cached in `<out_dir>/chem_grids/`:
+
+- `chemistry: equilibrium`: GGchem on (T, P) points (`model_dim 1`, `model_struc 5`, equilibrium condensation, `remove_condensates .false.`). **No rain-out / cold trapping:** a grid point does not know the layers below it. For the rain-out chemistry of the coupled runs (`remove_condensates .true.`) the grid gives the local-condensation composition only.
+- `chemistry: constant`: the saturation-capped constant mixing ratios (exact up to interpolation, condensation is local).
+
+Grid spacing: `session: {chem_dT: 50, chem_p_spacing: opacity}` (defaults; `opacity` = 1/3 dex like the opacity tables, `layers` = HELIOS' layer and interface pressures, or a number in dex). Finer grids than the opacity grid do help here: stock HELIOS (FastChem files) would resample them onto the opacity grid.
+
+All runs share one in-process HELIOS session (`chelio_sim/helios_session.py`; HELIOS' source is not modified): kernels compiled and opacities read once, opacity tables kept on the GPU. Runs can start from earlier solutions: `session: {warm_start: internal_temp}` (next-higher value), `previous`, `nearest`, or `init_from: <dir>` (same run names). A warm start skips HELIOS' radiation-only loop, takes over the convective layers of the earlier run (`<name>_restart.npz`) and needs only the convection loop. Thin radiative layers that keep flipping between radiative and convective are stitched after `stitch_flip_limit` flips instead of after 5000 iterations (`<name>_stitched_layers.dat`, warning in `run.log`; a gap right above the surface is only reported unless `stitch_surface: true`).
+
+```bash
+python3 run_grid.py grids/session_tests/t2b_grid_warm.yaml
+sbatch slurm/session_tests.sbatch    # legacy vs. session tests, see analyze/compare_session_tests.py
+```
+
 ### Other Tools
 
 * `run_fast.py`: same interface as `run_coupled.py`, but HELIOS is replaced by an approximate, much faster RT scheme that uses Rosseland mean opacities (`chelio_sim/rt_utils.py`).

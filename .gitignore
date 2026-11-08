@@ -18,6 +18,7 @@
 /analyze/contributions+opacities_CIAs.ipynb
 /analyze/plot_phase-diagram.ipynb
 
+/docs
 /tests
 /chelio_sim/test_*
 
