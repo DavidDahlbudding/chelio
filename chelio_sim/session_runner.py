@@ -14,9 +14,31 @@ Settings (grid file `session:` block, defaults in SESSION_DEFAULTS; also `sessio
   warm_start                none | previous | nearest | <parameter> (next-higher value of that parameter, as for the
                             coupled runner) - from runs of this grid that have a <name>_restart.npz
   init_from                 directory with runs of the same names to start from (e.g. an earlier session grid)
+Column model (chelio_sim/column.py; used as soon as one of these differs from its default; each key may also be
+set per run in `grid` / `cases`, dicts are then merged into the session block's dict):
+  chemistry_source          grid (chemistry grid as above) | constant_exact (constant_mixing_ratios, no grid) |
+                            callable (vmr_callable)
+  vmr_callable, vmr_callable_kwargs   "package.module:name" -> f(p [dyn/cm^2], T [K], species) -> {species: VMR}
+                            (with kwargs: name(**kwargs) returns f)
+  condensibles              (with chemistry: equilibrium, i.e. a GGchem grid, not recommended for now: see
+                            docs/column_model_handoff.md, 'Known problem: GGchem grids and condensibles')
+                            [] | auto (all active species with saturation data, thermo.AUTO_CONDENSIBLES) |
+                            list, e.g. [H2O, NH3]: cold trap, moist adiabat, inhibition (relative_humidity -> H2O)
+  convection                dict, see convection.ConvectionSettings: criterion (schwarzschild | ledoux), moist,
+                            inhibition (experimental), inhibition_mode (jump | radiative), jump_width, semiconvection
+                            (onset_only | strict), multi (sum | dominant),
+                            thermo_source (host | table), inhibition_hysteresis, moist_tolerance, unfreeze,
+                            max_adjust_iter, parcel_substeps
+  surface_pressure_model    dict, see surface.py: callable, kwargs, update_every, relax, tol, p_min, p_max,
+                            max_factor, settle (pressures in dyn/cm^2); the run parameter surface_pressure is
+                            the starting value
+  composition_damping       0 <= w < 1: log-VMR relaxation of the composition handed to HELIOS
+  vapour_supply             running_max (default: a decrease of a condensible's base VMR with height is taken as
+                            condensation and redone by the cold trap) | saturated | base, see column.ColumnModel
 Per-run outputs (<out_dir>/<name>/): HELIOS output, <name>_tp_coupling_0.dat (final T-P, bar/K, full precision),
-<name>_restart.npz, <name>_session.json (convergence, iterations, timings, stitching, grid clamping),
-vertical_mix_0.dat (grid VMRs along the final profile, mixfile format), species.dat, delad_chelio.dat, run.log.
+<name>_restart.npz, <name>_session.json (convergence, iterations, timings, stitching, grid clamping, column model),
+vertical_mix_0.dat (VMRs along the final profile, mixfile format), species.dat, delad_chelio.dat, run.log,
+<name>_column.dat (column model: per-layer thermodynamics, thresholds, saturation, inhibition).
 """
 import copy
 import logging
@@ -28,6 +50,7 @@ import numpy as np
 import yaml
 
 from chelio_sim import abundances, chem_grid, mixfile_utils, run_modes, species as species_utils
+from chelio_sim import column, composition, convection, surface, thermo
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +73,21 @@ SESSION_DEFAULTS = {
     "write_tp_every": 0,
     "warm_start": "none",
     "init_from": None,
+    # column model
+    "chemistry_source": "grid",
+    "vmr_callable": None,
+    "vmr_callable_kwargs": None,
+    "condensibles": [],
+    "convection": None,
+    "surface_pressure_model": None,
+    "composition_damping": 0.0,
+    "vapour_supply": "running_max",
 }
+# column-model settings that a run (grid / cases entry) may override; dicts are merged with the session block
+COLUMN_KEYS = ("chemistry_source", "vmr_callable", "vmr_callable_kwargs", "condensibles", "convection",
+               "surface_pressure_model", "composition_damping", "vapour_supply")
+# placeholder kappa when the column model computes kappa and c_p itself (HELIOS needs a value at setup)
+DUMMY_KAPPA = 0.2857
 # run parameters of the session runner (passed by run_grid.py like CLI flags of the other runners)
 SESSION_FLAGS = {*run_modes.SIM_PARAMS, "chemistry", "outgas_or_manual", "active_species", "constant_mixing_ratios",
                  "relative_humidity", "helios_param_file", *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM}
@@ -71,6 +108,65 @@ def load_config(path=None):
 
 def session_settings(config, spec_session=None):
     return {**SESSION_DEFAULTS, **(config.get("session") or {}), **(spec_session or {})}
+
+
+def task_settings(settings, params):
+    """Session settings of one run: column-model keys among the run parameters override the session block
+    (dict values such as convection: {inhibition: false} are merged into the block's dict)."""
+    out = dict(settings)
+    for key in COLUMN_KEYS:
+        if key in params:
+            value = params[key]
+            if isinstance(value, dict) and isinstance(out.get(key), dict):
+                value = {**out[key], **value}
+            out[key] = value
+    return out
+
+
+def uses_column_model(settings):
+    return (settings.get("chemistry_source", "grid") != "grid" or bool(settings.get("condensibles"))
+            or bool(settings.get("convection")) or bool(settings.get("surface_pressure_model"))
+            or float(settings.get("composition_damping") or 0) > 0)
+
+
+def build_surface_pressure(spec):
+    if not spec:
+        return surface.SurfacePressure()
+    spec = dict(spec)
+    func = composition.load_callable(spec.pop("callable"), spec.pop("kwargs", None))
+    return surface.SurfacePressure(func, **spec)
+
+
+def build_column_model(settings, sim_p, active, grid, relative_humidity):
+    """ColumnModel from the session settings (see the module docstring)."""
+    source = settings.get("chemistry_source", "grid")
+    if source == "grid":
+        comp = composition.GridComposition(grid)
+    elif source == "constant_exact":
+        if sim_p["chemistry"] != "constant":
+            raise ValueError("chemistry_source constant_exact needs chemistry: constant (constant_mixing_ratios)")
+        comp = composition.ConstantComposition(sim_p["constant_mixing_ratios"])
+    elif source == "callable":
+        if not settings.get("vmr_callable"):
+            raise ValueError("chemistry_source callable needs vmr_callable: package.module:name")
+        func = composition.load_callable(settings["vmr_callable"], settings.get("vmr_callable_kwargs"))
+        comp = composition.CallableComposition(func, label=str(settings["vmr_callable"]))
+    else:
+        raise ValueError(f"chemistry_source must be grid, constant_exact or callable, got {source!r}")
+    names = settings.get("condensibles") or []
+    if names == "auto":
+        names = [s for s in thermo.AUTO_CONDENSIBLES if s in active]
+    elif isinstance(names, str):
+        names = [s.strip() for s in names.split(",") if s.strip()]
+    missing = [s for s in names if s not in active]
+    if missing:
+        raise ValueError(f"condensibles {missing} are not active species ({active})")
+    rh = 1.0 if relative_humidity is None else float(relative_humidity)
+    conds = [thermo.Condensible(s, rh=rh if s == "H2O" else 1.0) for s in names]
+    return column.ColumnModel(comp, conds, convection.ConvectionSettings.from_dict(settings.get("convection")),
+                              build_surface_pressure(settings.get("surface_pressure_model")),
+                              composition_damping=float(settings.get("composition_damping") or 0.0),
+                              vapour_supply=settings.get("vapour_supply") or "running_max")
 
 
 def _file_logger(run_dir):
@@ -111,6 +207,15 @@ def run_task(session, name, out_dir, params, config, settings, init=None):
         log.info(f"--- Session run {name}: {chemistry} chemistry from a pre-computed grid ---")
 
         p_toa, p_boa = float(sim_p["toa_pressure"]), float(sim_p["surface_pressure"])
+        use_column = uses_column_model(settings)
+        surface_spec = settings.get("surface_pressure_model") or {}
+        p_boa_grid = max(p_boa, float(surface_spec.get("p_max", p_boa)))
+        if surface_spec and init and str(init).endswith(".npz"):
+            # variable surface pressure: start on the grid of the earlier solution (exact warm start)
+            with np.load(init) as d:
+                p_boa = float(d["p_int"][0])
+            log.info(f"Variable surface pressure: starting at the earlier run's {p_boa * 1e-6:.6g} bar")
+            p_boa_grid = max(p_boa_grid, p_boa)
         active = species_utils.resolve_active_species(sim_p)
         species_file = os.path.join(run_dir, "species.dat")
         species_utils.write_species_file(species_file, active, vmrs={s: species_utils.NEGLIGIBLE_VMR for s in active})
@@ -118,19 +223,34 @@ def run_task(session, name, out_dir, params, config, settings, init=None):
         grid_opts = {"dT": settings["chem_dT"], "t_min": settings["chem_t_min"], "t_max": settings["chem_t_max"],
                      "p_spacing": settings["chem_p_spacing"], "eqcond": settings["chem_eqcond"]}
         cache_dir = os.path.join(out_root, "chem_grids")
-        if chemistry == "equilibrium":
+        conv_settings = convection.ConvectionSettings.from_dict(settings.get("convection"))
+        need_grid = not use_column or settings.get("chemistry_source", "grid") == "grid" \
+            or conv_settings.thermo_source == "table"
+        grid = None
+        if not need_grid:
+            pass
+        elif chemistry == "equilibrium":
             abundances.calculate_abundances_manual(output_dir="ggchem", a_H=sim_p["a_h"], a_C=sim_p["a_c"],
                                                    a_O=sim_p["a_o"], a_N=sim_p["a_n"])
             abund_file = os.path.join(CHELIO_ROOT, "ggchem_inputs", "abundances.in")
             shutil.copy(abund_file, run_dir)
-            grid = chem_grid.get_or_build(cache_dir, "equilibrium", active, p_toa, p_boa, grid_opts, abundances_file=abund_file)
+            grid = chem_grid.get_or_build(cache_dir, "equilibrium", active, p_toa, p_boa_grid, grid_opts,
+                                          abundances_file=abund_file)
         else:
             rh = params.get("relative_humidity")
-            grid = chem_grid.get_or_build(cache_dir, "constant", active, p_toa, p_boa, grid_opts,
+            grid = chem_grid.get_or_build(cache_dir, "constant", active, p_toa, p_boa_grid, grid_opts,
                                           mixing_ratios=sim_p["constant_mixing_ratios"],
                                           relative_humidity=1.0 if rh is None else float(rh))
         delad_path = os.path.join(run_dir, "delad_chelio.dat")
-        grid.write_delad_table(delad_path)
+        if grid is not None:
+            grid.write_delad_table(delad_path)
+        column_model = None
+        if use_column:
+            column_model = build_column_model(settings, sim_p, active, grid, params.get("relative_humidity"))
+            log.info(f"Column model: {column_model!r}")
+        kappa = {"kappa_value": "file", "kappa_file_path": delad_path}
+        if use_column and conv_settings.thermo_source == "host":
+            kappa = {"kappa_value": DUMMY_KAPPA}  # kappa and c_p come from the column model
 
         cloud_flags = run_modes.resolve_clouds(sim_p, p_boa=p_boa, p_toa=p_toa, chelio_path=CHELIO_ROOT)
         param_file = os.path.join(CHELIO_ROOT, params.get("helios_param_file") or os.path.join("helios_inputs", "param.dat"))
@@ -143,8 +263,7 @@ def run_task(session, name, out_dir, params, config, settings, init=None):
             "internal_temperature": sim_p["internal_temp"],
             "surface_albedo": sim_p["surface_albedo"],
             "path_to_species_file": species_file,
-            "kappa_value": "file",
-            "kappa_file_path": delad_path,
+            **kappa,
             "maximum_number_of_iterations": int(settings["max_iter"]),
             "radiative_equilibrium_criterion": config["coupling"]["rad_eq_criterion"],
             **cloud_flags,
@@ -152,13 +271,19 @@ def run_task(session, name, out_dir, params, config, settings, init=None):
         if init:
             log.info(f"Warm start from {init}")
         result = session.run(
-            helios_params, vmr_provider=grid.provider(), init=init,
+            helios_params, vmr_provider=None if use_column else grid.provider(), column_model=column_model, init=init,
             cold_start_temperature=settings["cold_start_temperature"], min_conv_iter=settings["min_conv_iter"],
             rad_max_iter=settings["rad_max_iter"], write_tp_every=settings["write_tp_every"],
             stitch_flip_limit=settings["stitch_flip_limit"], stitch_after_iter=settings["stitch_after_iter"],
             stitch_surface=settings["stitch_surface"], stitch_flip_start=settings["stitch_flip_start"],
         )
-        write_vertical_mix(os.path.join(run_dir, "vertical_mix_0.dat"), grid, result["T_profile"])
+        if column_model is not None:
+            write_vertical_mix(os.path.join(run_dir, "vertical_mix_0.dat"), column_model.species,
+                               lambda p_bar, T: column_model.vmr_profile(np.asarray(p_bar) * 1e6, T),
+                               result["T_profile"])
+        else:
+            write_vertical_mix(os.path.join(run_dir, "vertical_mix_0.dat"), grid.species, grid.vmr_profile,
+                               result["T_profile"])
         stats = result.get("vmr_provider_stats") or {}
         if stats.get("frac_T_clamped", 0) > 0:
             log.warning(f"T profile left the chemistry grid ({stats['T_seen']} K vs grid {stats['T_grid']} K) in "
@@ -171,15 +296,16 @@ def run_task(session, name, out_dir, params, config, settings, init=None):
         handler.close()
 
 
-def write_vertical_mix(path, grid, profile):
-    """Grid VMRs along the final T-P profile, in the mixfile format of convert_ggchem_to_helios."""
+def write_vertical_mix(path, species, vmr_profile, profile):
+    """VMRs (vmr_profile(p_bar, T) -> (n, n_species)) along the final T-P profile (BOA first), in the mixfile format
+    of convert_ggchem_to_helios."""
     p = np.asarray(profile["p_bar"])
     T = np.asarray(profile["T"])
-    vmr = grid.vmr_profile(p, T)
-    weights = np.array([chem_grid.species_lib[s].weight for s in grid.species])
+    vmr = vmr_profile(p, T)
+    weights = np.array([chem_grid.species_lib[s].weight for s in species])
     mu = vmr @ weights / vmr.sum(axis=1)
     n_tot = p * 1e6 / (mixfile_utils.kB * T)
-    header = ["P(bar)", "T(k)", "n_<tot>(cm-3)", "m(u)", "e-", *grid.species]
+    header = ["P(bar)", "T(k)", "n_<tot>(cm-3)", "m(u)", "e-", *species]
     data = np.column_stack([p, T, n_tot, mu, np.zeros_like(p), vmr])
     header_string = "\t".join(h + " " * max(16 - len(h), 0) for h in header)
     np.savetxt(path, data, header=header_string, fmt="%.10e", comments="", delimiter="\t")
@@ -283,7 +409,8 @@ class SessionGridRunner:
         if self.spec.get("helios_param") and "helios_param_file" not in params:
             params["helios_param_file"] = self.spec["helios_param"]
         try:
-            result = run_task(self.session, task.name, self.out_dir, params, self.config, self.settings, init=init)
+            result = run_task(self.session, task.name, self.out_dir, params, self.config,
+                              task_settings(self.settings, params), init=init)
         except Exception as e:
             log.exception(f"Session run {task.name} failed")
             return "failed", e

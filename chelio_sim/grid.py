@@ -55,7 +55,10 @@ RUNNER_FLAGS = {
                 *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM},
     "fast": {*run_modes.SIM_PARAMS, *_MODE_KEYS, "constant_mixing_ratios"},
     "session": {*run_modes.SIM_PARAMS, "chemistry", "outgas_or_manual", "active_species", "constant_mixing_ratios",
-                "relative_humidity", "helios_param_file", *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM},
+                "relative_humidity", "helios_param_file", *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM,
+                # column-model settings per run (session_runner.COLUMN_KEYS), override the session block
+                "chemistry_source", "vmr_callable", "vmr_callable_kwargs", "condensibles", "convection",
+                "surface_pressure_model", "composition_damping", "vapour_supply"},
 }
 # warm_start values of runner session that are modes, not a parameter name
 SESSION_WARM_START_MODES = ("none", "previous", "nearest")

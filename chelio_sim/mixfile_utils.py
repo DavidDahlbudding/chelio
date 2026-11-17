@@ -83,6 +83,21 @@ def _validate_log10_pressure_grid(p_bar: np.ndarray, rtol: float = 1e-2, atol: f
         )
 
 
+def _ascending_uniform_log_pressure(p_bar, vmr_profile, rtol=1e-6):
+    """(p_bar, vmr) sorted by ascending P and, if not evenly spaced in log10(P), resampled onto an evenly spaced
+    axis between the same end points (same number of points; log10 VMR interpolated linearly in log10 P)."""
+    order = np.argsort(p_bar)
+    p_bar, vmr_profile = p_bar[order], vmr_profile[order]
+    logp = np.log10(p_bar)
+    logp_u = np.linspace(logp[0], logp[-1], len(logp))
+    if np.allclose(logp_u, logp, rtol=0, atol=rtol * max(1.0, logp[-1] - logp[0])):
+        return 10.0 ** logp_u, vmr_profile
+    logv = np.log10(np.clip(vmr_profile, 1e-300, None))
+    vmr_u = np.column_stack([10.0 ** np.interp(logp_u, logp, logv[:, j]) for j in range(vmr_profile.shape[1])])
+    vmr_u[:, np.all(vmr_profile <= 0, axis=0)] = 0.0
+    return 10.0 ** logp_u, vmr_u
+
+
 def _get_janaf_cp_interpolator(species: str):
     """Return Cp(T) interpolator from GGchem JANAF tables.
 
@@ -132,7 +147,12 @@ def write_helios_delad_table(
     t_min, t_max = t_min_max
     vmr_profile = np.asarray(vmr_profile, dtype=float)
 
-    _validate_log10_pressure_grid(p_bar)
+    # HELIOS sorts the pressure axis of the table ascending but takes the values in file order (read.py,
+    # read_kappa_table_or_use_constant_kappa), and the CUDA kernels index it as evenly spaced in log10(P).
+    # Profiles from mixfiles run BOA -> TOA with a half step at the bottom, so sort ascending and resample
+    # onto an evenly spaced log10(P) axis with the same number of points (log VMRs interpolated).
+    p_bar, vmr_profile = _ascending_uniform_log_pressure(p_bar, vmr_profile)
+    _validate_log10_pressure_grid(p_bar, rtol=1e-6, atol=1e-9)
 
     # Build linear T grid with constant steps, step size <= t_step_max_k.
     t_min = t_min * 0.9
@@ -372,7 +392,7 @@ def p_sat(T, species, mask=False):
         # CRC Handbook of Chemistry and Physics (Weast 1971), GGchem
         psat = np.exp(10.53 - 2161.0/T - 86596.0/T**2)*bar
         if mask:
-            mask = T > mols['NH3']['critical'][0]  # 405.5 K
+            mask = T > mol_dict['NH3']['critical'][0]  # 405.5 K
             psat[mask] = np.nan
 
         # NIST (164-371.5K)
@@ -505,39 +525,45 @@ def cap_vmrs_by_saturation(p_bar, T_k, species_list, base_vmr, relative_humidity
     vmr /= vmr.sum(axis=1, keepdims=True)
 
     # 3. Iterative Adjustment
-    max_iter = 100
+    return redistribute_capped(vmr, max_vmr)
+
+
+def redistribute_capped(vmr, max_vmr, max_iter=100):
+    """
+    Clamp VMRs (n_points, n_species), normalised to 1 per point, to the caps max_vmr (same shape, inf = no cap) and
+    give the missing gas to the species that are not capped, proportionally to their VMRs; repeated until nothing
+    changes (a species pushed over its cap by the redistribution is clamped in the next round). Modifies `vmr`.
+    """
     for _ in range(max_iter):
         prev_vmr = vmr.copy()
-        
+
         # Apply limits
-        #print(vmr[0,:])
-        #print(max_vmr[0,:])
         limited = vmr >= max_vmr
         vmr[limited] = max_vmr[limited]
-        
+
         # Calculate deficit
         current_sum = vmr.sum(axis=1, keepdims=True)
         deficit = 1.0 - current_sum
-        
+
         # If no deficit (or converged), break
         if np.all(np.isclose(current_sum, 1.0, atol=1e-12)):
             break
-            
+
         # Identify species that can still accept gas
         can_accept = np.logical_and(~limited, vmr >= 1e-29)
         if not np.any(can_accept):
             # Physical failure: everything is condensed
             log.warning("All species saturated! Mean molecular weight may be inaccurate.")
             break
-            
+
         # Redistribute deficit proportionally to those NOT limited
         # Mask weights for limited species
         weights = prev_vmr * can_accept
         weight_sum = weights.sum(axis=1, keepdims=True)
-        
+
         # Avoid division by zero if all non-limited have 0 initial VMR
-        weight_sum[weight_sum == 0] = 1.0 
-        
+        weight_sum[weight_sum == 0] = 1.0
+
         vmr += (weights / weight_sum) * deficit
 
         if np.allclose((vmr-prev_vmr), 0.0, atol=1e-12):

@@ -26,14 +26,22 @@ and then runs any number of HELIOS models one after another in the same process.
    of the free memory). Stock HELIOS re-reads them every run and re-uploads every table to the GPU
    every 10th iteration.
 
+5. Column model (`run(..., column_model=column.ColumnModel(...))`, chelio_sim/column.py): composition from any
+   function with cold trap / rain-out of condensibles, moist (multi-condensible) pseudoadiabats, Ledoux criterion,
+   condensation-inhibited convection (Leconte et al. 2017) and a variable surface pressure (in-run regridding).
+   Without a column model, runs behave as before (VMR provider or stock HELIOS).
+
 What is patched (only inside a process that created a HeliosSession):
-  host_functions.calculate_vmr_for_all_species   -> VMR provider (stock behaviour without one)
-  host_functions.mark_convective_layers          -> stitching policy (stock behaviour without one)
+  host_functions.calculate_vmr_for_all_species   -> column model / VMR provider (stock behaviour without one)
+  host_functions.mark_convective_layers          -> column model + stitching policy (stock without them)
+  host_functions.conv_check, conv_correct,
+  convective_adjustment                          -> column model (chelio_sim/convection.py; stock without one)
   read.Read.read_opac_file                       -> host cache
-  computation.Compute.convection_loop and
+  computation.Compute.convection_loop, interpolate_kappa_and_cp and
   .calculate_total_opacity_and_scat_cross_sections_from_species -> subclass `SessionCompute`
 `SessionCompute.convection_loop` is a copy of the fork's loop (HELIOS fork commit 3ae6031) with the
-changes marked "chelio:"; keep it in sync if the HELIOS loop changes.
+changes marked "chelio:"; keep it in sync if the HELIOS loop changes (likewise convection.conv_correct,
+mark_convective_layers, conv_check and convective_adjustment, copies of host_functions).
 
 HELIOS' own "write TP profile during run" is switched off (the fork's version for non-coupled runs forces
 >= 100 convection iterations and lets the radiative and convective phases overwrite each other's files);
@@ -53,6 +61,8 @@ import sys
 import time
 
 import numpy as np
+
+from chelio_sim import convection
 
 log = logging.getLogger(__name__)
 
@@ -117,7 +127,14 @@ _ORIGINAL = {}
 _HOST_OPACITY_CACHE = {}
 
 
+def _column(quant):
+    return getattr(quant, "chelio_column", None)
+
+
 def _patched_calculate_vmr_for_all_species(quant):
+    col = _column(quant)
+    if col is not None:
+        return col.update_composition(quant)
     provider = getattr(quant, "chelio_vmr_provider", None)
     if provider is None:
         return _ORIGINAL["calculate_vmr_for_all_species"](quant)
@@ -150,11 +167,44 @@ def _patched_calculate_vmr_for_all_species(quant):
 
 def _patched_mark_convective_layers(quant, stitching):
     policy = getattr(quant, "chelio_stitch", None)
-    if policy is None:
-        return _ORIGINAL["mark_convective_layers"](quant, stitching)
-    _ORIGINAL["mark_convective_layers"](quant, 0)
+    col = _column(quant)
+    if col is None:
+        if policy is None:
+            return _ORIGINAL["mark_convective_layers"](quant, stitching)
+        _ORIGINAL["mark_convective_layers"](quant, 0)
+        if stitching == 1:
+            policy.apply(quant)
+        return
+    convection.mark_convective_layers(quant, col)
     if stitching == 1:
-        policy.apply(quant)
+        if policy is not None:
+            policy.apply(quant)
+        elif quant.iter_value > HELIOS_STITCH_AFTER_ITER:
+            _ORIGINAL["stitching"](quant)
+        if col.inhibited.any():  # inhibited layers are radiative: never stitched
+            quant.conv_layer[:quant.nlayer][col.inhibited] = 0
+
+
+def _patched_conv_check(quant):
+    col = _column(quant)
+    if col is None:
+        return _ORIGINAL["conv_check"](quant)
+    convection.conv_check(quant, col)
+
+
+def _patched_conv_correct(quant, fudging):
+    col = _column(quant)
+    if col is None:
+        return _ORIGINAL["conv_correct"](quant, fudging)
+    convection.conv_correct(quant, col, fudging)
+
+
+def _patched_convective_adjustment(quant):
+    col = _column(quant)
+    if col is None:
+        return _ORIGINAL["convective_adjustment"](quant)
+    h = _ORIGINAL["hsfunc"]
+    convection.convective_adjustment(quant, col, h.conv_check, h.mark_convective_layers, h.conv_correct)
 
 
 def _cached_read_opac_file(original):
@@ -186,10 +236,17 @@ def _cached_read_opac_file(original):
 def _install_patches(h):
     if _ORIGINAL:
         return
+    _ORIGINAL["hsfunc"] = h.hsfunc
     _ORIGINAL["calculate_vmr_for_all_species"] = h.hsfunc.calculate_vmr_for_all_species
     _ORIGINAL["mark_convective_layers"] = h.hsfunc.mark_convective_layers
+    _ORIGINAL["conv_check"] = h.hsfunc.conv_check
+    _ORIGINAL["conv_correct"] = h.hsfunc.conv_correct
+    _ORIGINAL["convective_adjustment"] = h.hsfunc.convective_adjustment
     h.hsfunc.calculate_vmr_for_all_species = _patched_calculate_vmr_for_all_species
     h.hsfunc.mark_convective_layers = _patched_mark_convective_layers
+    h.hsfunc.conv_check = _patched_conv_check
+    h.hsfunc.conv_correct = _patched_conv_correct
+    h.hsfunc.convective_adjustment = _patched_convective_adjustment
     h.read.Read.read_opac_file = staticmethod(_cached_read_opac_file(h.read.Read.read_opac_file))
 
 
@@ -357,6 +414,123 @@ def _make_compute_class(h):
                             quant.dev_scat_cross_spec_int = gpuarray.to_gpu(sp.scat_cross_sect_interface)
                     self.add_to_mixed_scat_cross_sect(quant)
 
+        # chelio: column model -> targets / c_p from the host (no table; no log-T axis of the cp_interpol kernel)
+        def interpolate_kappa_and_cp(self, quant):
+            col = _column(quant)
+            if col is None:
+                return super().interpolate_kappa_and_cp(quant)
+            col.update_thermo(quant, compute_table=lambda q: comp.Compute.interpolate_kappa_and_cp(self, q))
+
+        def unfreeze_new_radiative_layers(self, quant, floor=1e-3, frozen=1e-5):
+            """
+            chelio: HELIOS' adaptive time-step prefactor of a layer decays while the layer is convective (its T is reset
+            every iteration); a layer that then turns radiative cannot relax any more ("frozen"; HELIOS' own fix is the
+            reset of all prefactors to 1e-3 at iteration 6000). A layer that has been radiative for adapt_interval
+            iterations with a prefactor below `frozen` gets `floor`.
+            """
+            col = _column(quant)
+            conv = np.array(quant.conv_layer, np.int32)
+            age = col.conv_prev
+            if age is None or age.shape != conv.shape:
+                age = np.zeros(conv.shape, int)
+            age = np.where(conv == 0, age + 1, 0)
+            col.conv_prev = age
+            cand = np.flatnonzero(age == int(quant.adapt_interval))
+            if not cand.size:
+                return
+            pref = np.empty(quant.nlayer + 1, quant.fl_prec)
+            cuda.memcpy_dtoh(pref, quant.dev_delta_t_prefactor)
+            low = cand[pref[cand] < frozen]
+            if low.size:
+                pref[low] = floor
+                cuda.memcpy_htod(quant.dev_delta_t_prefactor, pref)
+                col.n_unfrozen += int(low.size)
+
+        def update_surface_pressure(self, quant):
+            """chelio: evaluate the surface-pressure function and regrid if p_surf changes."""
+            col = _column(quant)
+            col.mark_dirty()
+            self.interpolate_temperatures(quant)
+            col.update_thermo(quant, compute_table=lambda q: comp.Compute.interpolate_kappa_and_cp(self, q))
+            p_new = col.surface.evaluate(col.state(quant), int(quant.iter_value))
+            if p_new is not None:
+                self.regrid(quant, p_new)
+
+        def regrid(self, quant, p_new):
+            """
+            chelio: new surface pressure p_new [dyn/cm^2] with the same nlayer and p_toa. Rebuilds the pressure grid
+            and column masses (hsfunc.construct_grid appends to lists, so not called), remaps T (log p; below the old
+            bottom along the bottom exponent kappa_int[0]) and the convective flags (nearest layer), re-uploads,
+            refreshes clouds / additional heating and recomputes opacities and fluxes. Call only before an iteration
+            with iter % adapt_interval == 0 (the adaptive time step re-stores its reference temperatures then).
+            """
+            col = _column(quant)
+            n = quant.nlayer
+            fl = quant.fl_prec
+            T = np.array(quant.dev_T_lay.get(), float)
+            p_lay_old = np.array(quant.dev_p_lay.get(), float)
+            p_int_old = np.array(quant.dev_p_int.get(), float)
+            k0 = float(quant.kappa_int[0])
+            quant.p_boa = fl(p_new)
+            p_lay, p_int = (np.array(a, float) for a in hsfunc.calculate_pressure_levels(quant))
+
+            lp_old = np.log(p_lay_old)
+            T_new = np.interp(np.log(p_lay)[::-1], lp_old[::-1], T[:n][::-1])[::-1]
+            below = p_lay > p_lay_old[0]
+            T_new[below] = T[0] * (p_lay[below] / p_lay_old[0]) ** k0
+            T_surf = T[n] * (p_int[0] / p_int_old[0]) ** k0
+            nearest = np.argmin(np.abs(np.log(p_lay)[:, None] - lp_old[None, :]), axis=1)
+            conv = np.array(quant.conv_layer, np.int32)
+            conv_new = np.append(conv[:n][nearest], conv[n]).astype(np.int32)
+
+            quant.p_lay, quant.p_int = p_lay.astype(fl), p_int.astype(fl)
+            quant.delta_colmass = ((p_int[:-1] - p_int[1:]) / quant.g).astype(fl)
+            quant.delta_col_upper = ((p_lay - p_int[1:]) / quant.g).astype(fl)
+            quant.delta_col_lower = ((p_int[:-1] - p_lay) / quant.g).astype(fl)
+            for name in ("p_lay", "p_int", "delta_colmass", "delta_col_upper", "delta_col_lower"):
+                getattr(quant, "dev_" + name).set(getattr(quant, name))
+            quant.T_lay = np.append(T_new, T_surf).astype(fl)
+            quant.dev_T_lay.set(quant.T_lay)
+            quant.conv_layer = conv_new
+            quant.conv_unstable = np.zeros(n + 1, np.int32)
+            col.inhibited = col.inhibited[nearest]
+
+            if quant.add_heating == 1:
+                self.session.h.add_heat.load_heating_terms_or_not(quant)
+            if quant.clouds == 1:
+                quant.chelio_fogger.cloud_pre_processing(quant)
+                names = ["abs_cross_all_clouds_lay", "scat_cross_all_clouds_lay", "g_0_all_clouds_lay"]
+                if quant.iso == 0:
+                    names += ["abs_cross_all_clouds_int", "scat_cross_all_clouds_int", "g_0_all_clouds_int"]
+                for name in names:
+                    getattr(quant, "dev_" + name).set(np.asarray(getattr(quant, name), fl))
+            if quant.approx_f == 1 and not getattr(quant, "chelio_warned_f", False):
+                log.warning("approx_f with a variable surface pressure: the f factor keeps its value for the initial p_surf")
+                quant.chelio_warned_f = True
+            kmax = float(np.max(quant.kpress))
+            if p_new > kmax and not getattr(quant, "chelio_warned_kpress", False):
+                log.warning(f"surface pressure {p_new * 1e-6:.4g} bar above the opacity grid ({kmax * 1e-6:.4g} bar): "
+                            "opacities clamped there")
+                quant.chelio_warned_kpress = True
+            policy = getattr(quant, "chelio_stitch", None)
+            if policy is not None:
+                policy.previous = None
+
+            col.regrids.append([int(quant.iter_value), float(p_int_old[0]), float(p_new)])  # dyn/cm^2
+            log.info(f"Iteration {quant.iter_value}: surface pressure {p_int_old[0] * 1e-6:.6g} -> {p_new * 1e-6:.6g} bar "
+                     f"(target {col.surface.history[-1][2] * 1e-6:.6g} bar)")
+            col.x_prev = None
+            col.mark_dirty()
+            self.interpolate_temperatures(quant)
+            self.interpolate_planck(quant)
+            self.update_atmosphere(quant)
+            self.compute_fluxes(quant)
+            quant.F_net = quant.dev_F_net.get()
+            quant.F_up_tot = quant.dev_F_up_tot.get()
+            quant.F_down_tot = quant.dev_F_down_tot.get()
+            quant.F_net_diff = quant.dev_F_net_diff.get()
+            col.mark_dirty()
+
         def update_atmosphere(self, quant):
             """The every-10th-iteration block of the loops: composition, opacities, transmission, heights, beam."""
             if quant.opacity_mixing == "premixed":
@@ -399,9 +573,12 @@ def _make_compute_class(h):
             """Copy of the fork's convection loop; chelio changes are marked."""
             opts = self.session._run_opts
             policy = getattr(quant, "chelio_stitch", None)
+            col = _column(quant)  # chelio: column model (None: HELIOS' convection)
 
             if quant.singlewalk == 0 and quant.convection == 1:
 
+                if col is not None:
+                    col.mark_dirty()
                 self.interpolate_kappa_and_cp(quant)
                 quant.T_lay = quant.dev_T_lay.get()
                 quant.p_lay = quant.dev_p_lay.get()
@@ -436,6 +613,8 @@ def _make_compute_class(h):
                     diag["warm_adiabat_dT_surface"] = float(dT[quant.nlayer])
                     quant.dev_T_lay = gpuarray.to_gpu(quant.T_lay)
                     self.interpolate_temperatures(quant)
+                    if col is not None:
+                        col.mark_dirty()
                     self.interpolate_kappa_and_cp(quant)
                     quant.kappa_lay = quant.dev_kappa_lay.get()
                     if quant.iso == 0:
@@ -452,8 +631,16 @@ def _make_compute_class(h):
                              f"the convective zones on adiabats (max |dT| {diag['warm_adiabat_max_abs_dT']:.3g} K) "
                              f"{diag['imbalance_after_adiabat'][0]:.2e}, {diag['imbalance_after_adiabat'][1]:.2e}")
 
-                # chelio: a warm start enters the loop with an exactly adiabatic (= stable) profile
+                # chelio: a warm start enters the loop with an exactly adiabatic (= stable) profile;
+                # a variable surface pressure always enters it
                 condition = sum(quant.conv_unstable) > 0 or (warm_conv is not None and sum(quant.conv_layer) > 0)
+                if col is not None and col.surface.active:
+                    condition = True
+                    every = col.surface.update_every
+                    if every % int(quant.adapt_interval):
+                        every = int(np.ceil(every / int(quant.adapt_interval)) * int(quant.adapt_interval))
+                        log.info(f"surface_pressure.update_every rounded up to {every} (multiple of HELIOS' adaptive interval)")
+                        col.surface.update_every = every
 
                 start_total = cuda.Event()
                 end_total = cuda.Event()
@@ -477,7 +664,12 @@ def _make_compute_class(h):
 
                 min_iter = opts.get("min_conv_iter", HELIOS_MIN_CONV_ITER)
                 # chelio: no forced >= 100 iterations for coupling iterations > 0 (fork), see min_conv_iter
+                if col is not None:
+                    col.in_loop = True
                 while condition:
+
+                    if col is not None:  # chelio: thermodynamics once per iteration (adjustment and marking agree)
+                        col.mark_dirty()
 
                     if quant.iter_value % 100 == 0:
                         start_loop.record()
@@ -526,12 +718,20 @@ def _make_compute_class(h):
                     hsfunc.mark_convective_layers(quant, stitching=1)
                     if policy is not None:  # chelio
                         policy.count_flips(quant)
+                    if col is not None and col.settings.unfreeze:  # chelio
+                        self.unfreeze_new_radiative_layers(quant)
 
                     if quant.physical_tstep != 0:
                         break
 
                     quant.F_smooth_sum = quant.dev_F_smooth_sum.get()
-                    condition = not (hsfunc.check_for_radiative_eq(quant)) or (quant.iter_value < min_iter) or (sum(quant.conv_layer) == 0)
+                    if col is None:
+                        condition = not (hsfunc.check_for_radiative_eq(quant)) or (quant.iter_value < min_iter) or (sum(quant.conv_layer) == 0)
+                    else:
+                        # chelio: a column without convective layers may be converged (e.g. inhibited, radiative);
+                        # a variable surface pressure must have converged as well
+                        condition = not (hsfunc.check_for_radiative_eq(quant)) or (quant.iter_value < min_iter) \
+                            or not col.surface.converged
 
                     if quant.iter_value % 100 == 1:
                         hsfunc.give_feedback_on_convergence(quant)
@@ -539,6 +739,8 @@ def _make_compute_class(h):
                         g, w = radiative_imbalance(quant)
                         quant.chelio_diag["history"].append([int(quant.iter_value), g, w, int(sum(quant.conv_layer[:quant.nlayer])),
                                                              float(quant.T_lay[quant.nlayer])])
+                        if col is not None:
+                            col.record(quant)
 
                     if condition:
                         if quant.iter_value % quant.n_plot == 0 and quant.realtime_plot == 1:
@@ -564,6 +766,11 @@ def _make_compute_class(h):
                         quant.iter_value += 1
                         quant.iter_value = np.int32(quant.iter_value)
 
+                        # chelio: variable surface pressure, right before an iteration where the adaptive time step
+                        # stores its reference temperatures (iter % adapt_interval == 0)
+                        if col is not None and col.surface.active and quant.iter_value % col.surface.update_every == 0:
+                            self.update_surface_pressure(quant)
+
                     # chelio: own intermediate T-P output instead of HELIOS' "write TP profile during run"
                     every = opts.get("write_tp_every") or 0
                     if every and quant.iter_value % every == 0:
@@ -579,6 +786,8 @@ def _make_compute_class(h):
                         quant.chelio_aborted = True
                         break
 
+                if col is not None:
+                    col.in_loop = False
                 end_total.record()
                 end_total.synchronize()
                 time_total = start_total.time_till(end_total)
@@ -688,6 +897,9 @@ class HeliosSession:
         T = np.concatenate(([T[quant.nlayer]], T[:quant.nlayer]))
         np.savetxt(os.path.join(directory, f"{phase}_{int(quant.iter_value)}.dat"), np.column_stack([p, T]),
                    fmt="%.12e", header="press.[bar] temp.[K]", comments="")
+        col = _column(quant)
+        if col is not None and col.diag is not None and phase == "conv":  # column diagnostics of this iteration
+            col.write_column_file(os.path.join(directory, f"column_{int(quant.iter_value)}.dat"), quant)
 
     @staticmethod
     def helios_args(params):
@@ -704,7 +916,7 @@ class HeliosSession:
     def run(self, params, vmr_provider=None, vmr_species=None, init=None, cold_start_temperature=COLD_START_TEMPERATURE,
             min_conv_iter=HELIOS_MIN_CONV_ITER, rad_max_iter=None, write_tp_every=0,
             stitch_flip_limit=STITCH_FLIP_LIMIT, stitch_after_iter=HELIOS_STITCH_AFTER_ITER, stitch_surface=False,
-            stitch_flip_start=STITCH_FLIP_START):
+            stitch_flip_start=STITCH_FLIP_START, column_model=None):
         """
         One HELIOS model. `params`: HELIOS command-line options (e.g. name, output_directory, parameter_file,
         boa_pressure, internal_temperature, path_to_species_file, kappa_file_path, maximum_number_of_iterations).
@@ -712,6 +924,8 @@ class HeliosSession:
 
         vmr_provider(p_bar, T, species) -> {species: VMR array}: composition as function of the T-P profile;
             vmr_species: species to ask for (default: all non-CIA species of the species file)
+        column_model: column.ColumnModel (composition with cold trap, moist/Ledoux convection, inhibition,
+            variable surface pressure); replaces vmr_provider. Writes <name>_column.dat.
         init: earlier solution (see load_initial_state) for a warm start; None = isothermal cold start
         rad_max_iter: cold start only, cap of the radiation-only loop; then continue with the convection loop
             (the fork's started_convection behaviour). Default: maximum_number_of_iterations.
@@ -730,6 +944,10 @@ class HeliosSession:
         inputs = {"kappa_file_sha1": hashlib.sha1(open(kappa_file, "rb").read()).hexdigest()
                   if kappa_file and os.path.exists(kappa_file) else None,
                   "vmr_provider": repr(vmr_provider) if vmr_provider is not None else None}
+        if column_model is not None:
+            if vmr_provider is not None:
+                raise ValueError("Give either vmr_provider or column_model (its composition), not both")
+            inputs["column_model"] = repr(column_model)
 
         reader = h.read.Read()
         keeper = h.quantities.Store()
@@ -755,7 +973,7 @@ class HeliosSession:
                     self._tag_opacity_keys(keeper, reader)
                     reader.read_species_scat_cross_sections(keeper)
                     reader.read_species_mixing_ratios(keeper)
-                self._setup_vmr_provider(keeper, vmr_provider, vmr_species)
+                self._setup_vmr_provider(keeper, vmr_provider, vmr_species, need_species=column_model is not None)
 
                 reader.read_kappa_table_or_use_constant_kappa(keeper)
                 reader.read_or_fill_surf_albedo_array(keeper)
@@ -780,6 +998,11 @@ class HeliosSession:
                 keeper.allocate_on_device()
 
                 keeper.chelio_stitch = StitchPolicy(keeper.nlayer, stitch_flip_limit, stitch_after_iter, stitch_surface, stitch_flip_start)
+                keeper.chelio_fogger = fogger
+                keeper.chelio_reader = reader
+                keeper.chelio_column = column_model
+                if column_model is not None:
+                    column_model.bind(keeper, keeper.chelio_vmr_species, keeper.chelio_cia_partners)
                 keeper.chelio_aborted = False
                 keeper.chelio_conv_iter = 0
                 keeper.chelio_diag = {"history": []}
@@ -822,6 +1045,9 @@ class HeliosSession:
                 self.compute.integrate_beamflux(keeper)
 
                 keeper.copy_device_to_host()
+                if column_model is not None:  # final diagnostics at the final temperatures
+                    column_model.mark_dirty()
+                    self.compute.interpolate_kappa_and_cp(keeper)
                 h.hsfunc.calculate_conv_flux(keeper)
                 h.hsfunc.calc_F_ratio(keeper)
                 self._write_helios_output(keeper, reader, writer)
@@ -851,9 +1077,9 @@ class HeliosSession:
                     sp.chelio_opacity_key = (path, stat.st_mtime_ns, stat.st_size, str(keeper.fl_prec))
                     break
 
-    def _setup_vmr_provider(self, keeper, provider, species):
+    def _setup_vmr_provider(self, keeper, provider, species, need_species=False):
         keeper.chelio_vmr_provider = provider
-        if provider is None:
+        if provider is None and not need_species:
             return
         lib = self.h.species_lib
         molecules = [sp.name for sp in keeper.species_list if not sp.name.startswith("CIA")]
@@ -954,6 +1180,16 @@ class HeliosSession:
         provider = keeper.chelio_vmr_provider
         if provider is not None and hasattr(provider, "stats"):
             info["vmr_provider_stats"] = provider.stats()
+        col = getattr(keeper, "chelio_column", None)
+        if col is not None:
+            info["column_model"] = repr(col)
+            info["p_surf"] = float(p_int[0])  # dyn/cm^2
+            info["column"] = col.stats()
+            if hasattr(col.composition, "stats"):
+                info["vmr_provider_stats"] = col.composition.stats()
+            col.write_column_file(os.path.join(run_dir, f"{keeper.name}_column.dat"), keeper)
+            converged = converged and col.surface.converged
+            info["converged"] = converged
         info["T_profile"] = {"p_bar": p.tolist(), "T": T.tolist()}
         self._last_run_dir = run_dir
         return info
