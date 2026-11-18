@@ -51,7 +51,7 @@ def main():
         "--only", action="append", metavar="KEY=VALUE[,VALUE...]",
         help="Only run tasks whose parameter KEY has one of the values (repeatable, e.g. --only cia_pair=N2-CH4 --only internal_temp=100).",
     )
-    parser.add_argument("--verbose", action="store_true", help="Show the output of each run instead of capturing it.")
+    parser.add_argument("--verbose", action="store_true", help="Show the output of each run instead of capturing it (session runner: also still in each run's run.log).")
     parser.add_argument(
         "--list-cia-sources", nargs="?", const=grid.CIA_SOURCE_DIR, metavar="FOLDER",
         help=f"List the CIA sources in $HELIOS_PATH/input/opacity/FOLDER (default {grid.CIA_SOURCE_DIR}) and exit.",
@@ -120,7 +120,7 @@ def main():
     session_runner = None
     if spec["runner"] == "session":
         from chelio_sim.session_runner import SessionGridRunner
-        session_runner = SessionGridRunner(spec, tasks, report=tqdm.write)
+        session_runner = SessionGridRunner(spec, tasks, report=tqdm.write, verbose=args.verbose)
         print(f"Session settings: {session_runner.settings}\n")
     warm_axis = grid.warm_start_axis(spec)
     with tqdm(total=len(tasks), desc="Simulations") as bar:

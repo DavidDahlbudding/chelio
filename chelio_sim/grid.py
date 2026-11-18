@@ -54,7 +54,7 @@ RUNNER_FLAGS = {
     "coupled": {*run_modes.SIM_PARAMS, *_MODE_KEYS, "constant_mixing_ratios", "relative_humidity", "init_pt_file", "helios_param_file",
                 *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM},
     "fast": {*run_modes.SIM_PARAMS, *_MODE_KEYS, "constant_mixing_ratios"},
-    "session": {*run_modes.SIM_PARAMS, "chemistry", "outgas_or_manual", "active_species", "constant_mixing_ratios",
+    "session": {*run_modes.SIM_PARAMS, "chemistry", "outgas_or_manual", "active_species", "constant_mixing_ratios", "cia_pairs",
                 "relative_humidity", "helios_param_file", *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM,
                 # column-model settings per run (session_runner.COLUMN_KEYS), override the session block
                 "chemistry_source", "vmr_callable", "vmr_callable_kwargs", "condensibles", "convection",
@@ -474,6 +474,26 @@ def c_plus_o_abundances(params):
     params["aN_suffix"] = f"_aN={_format_e_num(x_n)}" if x_n else ""
 
 
+def c_plus_o_constant_mixing(params):
+    """
+    Constant-chemistry version of c_plus_o_abundances (same labels and name fields, no nitrogen): all C in CH4,
+    all O in H2O, the rest of H in H2, i.e. X_CH4 = X_C, X_H2O = X_O, X_H2 = (X_H - 4 X_C - 2 X_O) / 2 with the
+    elemental fractions of c_plus_o_abundances, then normalised -> constant_mixing_ratios {H2, CH4, H2O}.
+    Use with chemistry: constant (condensation: session column model with condensibles [H2O, CH4]).
+    """
+    if float(params.get("X_N", 0)):
+        raise ValueError("c_plus_o_constant_mixing has no nitrogen (X_N must be 0)")
+    c_plus_o_abundances(params)
+    a_h, a_c, a_o = params["a_h"], params["a_c"], params["a_o"]
+    x = {"H2": (a_h - 4 * a_c - 2 * a_o) / 2, "CH4": a_c, "H2O": a_o}
+    if x["H2"] <= 0:
+        raise ValueError(f"not enough H for CH4 + H2O (CplusO={params['CplusO']}, CtoO={params['CtoO']})")
+    total = sum(x.values())
+    params["constant_mixing_ratios"] = {s: v / total for s, v in x.items()}
+    for key in ("a_h", "a_c", "a_o", "a_n"):  # not used by constant chemistry
+        params.pop(key)
+
+
 @functools.lru_cache(maxsize=1)
 def _config_gravity():
     """planet_params.g [cm/s^2] of the default config.yaml."""
@@ -523,6 +543,7 @@ def cloud_from_tau(params):
 
 DERIVE_HOOKS = {
     "c_plus_o_abundances": c_plus_o_abundances,
+    "c_plus_o_constant_mixing": c_plus_o_constant_mixing,
     "cia_pair_mixing": cia_pair_mixing,
     "cloud_from_tau": cloud_from_tau,
     "early_mars_mixing": early_mars_mixing,

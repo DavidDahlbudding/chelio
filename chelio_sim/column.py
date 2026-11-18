@@ -263,9 +263,15 @@ class ColumnModel:
             cp = np.array(quant.dev_c_p_lay.get(), float)
             gamma = np.zeros(n)
         else:
-            cp_s = self.thermo.cp_species(T_lay)
-            cp = self.thermo.cp_mix(x_lay, cp_s)
-            k_lay, k_int = self._targets(T_lay, p_lay, p_int, x_lay, sat_lay, self.x_avail[1::2], cp_s, cp)
+            if self.settings.kappa is not None:
+                # constant dry adiabat (HELIOS' numeric `kappa value`): c_p = R / kappa everywhere
+                kap = float(self.settings.kappa)
+                cp = np.full(n, thermo.R / kap)
+                k_lay, k_int = np.full(n, kap), np.full(n + 1, kap)
+            else:
+                cp_s = self.thermo.cp_species(T_lay)
+                cp = self.thermo.cp_mix(x_lay, cp_s)
+                k_lay, k_int = self._targets(T_lay, p_lay, p_int, x_lay, sat_lay, self.x_avail[1::2], cp_s, cp)
             if K:
                 gamma = thermo.inhibition_gamma(x_lay[:, self.cond], xi_lay, sat_lay, self.M_c, mu)
             else:

@@ -89,7 +89,7 @@ def plot_profile(
     if y_axis == 'pressure':
         y_data = data['pressure_bar']
     elif y_axis == 'altitude':
-        y_data = data['altitudes_cm']
+        y_data = data['altitude_cm']
     else:
         raise ValueError("y_axis must be 'pressure' or 'altitude'")
 
@@ -167,7 +167,7 @@ def plot_profile_comparison(
         if y_axis == 'pressure':
             y_data = data['pressure_bar']
         else:
-            y_data = data['altitudes_cm']
+            y_data = data['altitude_cm']
         
         x_data, _ = _get_profile_data(data, run, param_key, mol_type)
         
@@ -180,6 +180,20 @@ def plot_profile_comparison(
     return fig, ax
 
 
+def _order_colorbar(fig, ax, cmap, iterations, max_ticks=8, label="iteration i (evenly spaced by file order)"):
+    """Colorbar over the file order k = 0 ... N-1, labelled with the iteration numbers i of (some of) the files."""
+    from matplotlib.colors import Normalize
+    n = len(iterations)
+    sm = plt.cm.ScalarMappable(norm=Normalize(vmin=0, vmax=max(n - 1, 1)), cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, label=label)
+    n_ticks = n if n <= 1.5 * max_ticks else max(2, int(max_ticks))
+    ticks = np.unique(np.linspace(0, n - 1, n_ticks).round().astype(int))
+    cbar.set_ticks(ticks)
+    cbar.set_ticklabels([f"{iterations[k]:g}" if np.isfinite(iterations[k]) else str(k) for k in ticks])
+    return cbar
+
+
 def plot_all_iteration_profiles(
     chelio_run: ChelioRun, 
     param_key: str, 
@@ -190,11 +204,41 @@ def plot_all_iteration_profiles(
     cmap_name='viridis', 
     mol_type: str = 'mol',
     legend: bool = True,
+    colorbar: bool = False,
+    source: str = 'auto',
+    every: int = 1,
+    max_ticks: int = 8,
     **kwargs
 ):
     """
-    Plots the evolution of a profile over all coupling iterations for a single run.
+    Plots the evolution of a profile over all iterations of a single run. Profiles are coloured by their position in
+    the sorted list of files only (k = 0 ... N-1), not by the iteration number i, so unevenly spaced i get evenly
+    spaced colours; legend labels / colorbar ticks show the actual i.
+
+    source: 'chemistry' = the vertical_mix_<i> / Static_Conc_<i> files read by read_data (all param_keys);
+            'tp' = the <run_name>_tp_coupling_<i>.dat files (temperature on the pressure axis only; see
+            plot_tp_iterations, final profile in black); 'auto' (default) = 'tp' for temperature vs pressure if
+            there are more tp_coupling files than chemistry iterations (e.g. session runs: one vertical_mix_0 but
+            a T-P file every 100 iterations), else 'chemistry'.
+    colorbar: colorbar over the file order instead of / in addition to the legend. every: plot every n-th profile
+    (the last one is always plotted).
     """
+    if source not in ('auto', 'tp', 'chemistry'):
+        raise ValueError("source must be 'auto', 'tp' or 'chemistry'")
+    temp_vs_p = param_key.lower() == 'temperature' and y_axis == 'pressure'
+    if source == 'tp' and not temp_vs_p:
+        raise ValueError("source 'tp' only has temperature vs pressure")
+    if temp_vs_p and source != 'chemistry':
+        if len(chelio_run.tp_iterations) < 2:
+            chelio_run.read_tp_profiles(mode='all')
+        if source == 'tp' or len(chelio_run.tp_iterations) > chelio_run.num_iterations_read:
+            fig, ax = plot_tp_iterations(chelio_run, ax=ax, cmap_name=cmap_name, log_y=log_y, every=every,
+                                         colorbar=colorbar or not legend or len(chelio_run.tp_iterations) > 12,
+                                         legend=legend, max_ticks=max_ticks, **kwargs)
+            if log_x:
+                ax.set_xscale('log')
+            return fig, ax
+
     if chelio_run.load_mode != 'all':
         print("Warning: ChelioRun was not loaded with load_mode='all'. Plot may be incomplete.")
     
@@ -214,28 +258,80 @@ def plot_all_iteration_profiles(
 
     cmap = plt.get_cmap(cmap_name)
     num_iters = chelio_run.num_iterations_read
-    
-    for i in range(num_iters):
-        data = chelio_run.get_iteration_data(i)
+    its = np.asarray(chelio_run.iterations_read, dtype=float)
+    if len(its) != num_iters:
+        its = np.arange(num_iters, dtype=float)
+    selected = sorted(set(range(0, num_iters, max(1, int(every)))) | {num_iters - 1}) if num_iters else []
+
+    for k in selected:
+        data = chelio_run.get_iteration_data(k)
         if "error" in data:
             continue
 
         if y_axis == 'pressure':
             y_data = data['pressure_bar']
         else:
-            y_data = data['altitudes_cm']
+            y_data = data['altitude_cm']
 
         x_data, _ = _get_profile_data(data, chelio_run, param_key, mol_type)
         
-        color = cmap(i / max(1, num_iters - 1))
-        label = f"{i}"
+        color = cmap(k / max(1, num_iters - 1))
+        label = f"{its[k]:g}" if np.isfinite(its[k]) else f"{k}"
         
         ax.plot(x_data, y_data, color=color, label=label, **kwargs)
     
+    if colorbar and num_iters:
+        _order_colorbar(fig, ax, cmap, its, max_ticks=max_ticks)
     if legend:
         ax.legend()
 
     return fig, ax
+
+def plot_tp_iterations(
+    chelio_run: ChelioRun,
+    ax=None,
+    cmap_name: str = 'viridis',
+    log_y: bool = True,
+    every: int = 1,
+    colorbar: bool = True,
+    legend: bool = True,
+    max_ticks: int = 8,
+    final_kwargs: dict = None,
+    **kwargs
+):
+    """
+    Plots all T-P profiles of the <run_name>_tp_coupling_<i>.dat files (ChelioRun.tp_iterations, sorted by i),
+    coloured by their position in that order only (k = 0, 1, ..., N-1), not by i: unevenly spaced i (e.g. 0, 100,
+    ..., 3100, 3150, ... of session runs, or -1, 0, 1, ... of coupled runs) get evenly spaced colours. The colorbar
+    is labelled with the actual i of every file (up to 1.5 max_ticks files) or of max_ticks evenly chosen ones.
+    every: plot every n-th file (the last one is always plotted, with final_kwargs, default black).
+    Reads the files if the run was not loaded with load_mode='all'.
+    """
+    if len(chelio_run.tp_iterations) < 2:
+        chelio_run.read_tp_profiles(mode='all')
+    its = chelio_run.tp_iterations
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.get_figure()
+    if len(its) == 0:
+        print(f"No _tp_coupling_ files for run {chelio_run.run_name}")
+        return fig, ax
+
+    _setup_profile_axes(ax, 'pressure', "Temperature [K]", False, log_y)
+    cmap = plt.get_cmap(cmap_name)
+    n = len(its)
+    for k in range(0, n - 1, max(1, int(every))):
+        ax.plot(chelio_run.tp_temperatures_K[k], chelio_run.tp_pressures_bar[k], color=cmap(k / max(n - 1, 1)),
+                **kwargs)
+    final = {'color': 'k', 'lw': 1.5, 'label': f"final (i = {its[-1]})", **(final_kwargs or {})}
+    ax.plot(chelio_run.tp_temperatures_K[-1], chelio_run.tp_pressures_bar[-1], **final)
+    if colorbar:
+        _order_colorbar(fig, ax, cmap, its, max_ticks=max_ticks)
+    if legend:
+        ax.legend()
+    return fig, ax
+
 
 def _get_scalar_data(run: ChelioRun, y_param_key: str, layer_idx: int):
     """Helper to extract a single scalar data point from a run."""

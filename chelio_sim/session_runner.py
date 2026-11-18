@@ -11,6 +11,9 @@ Settings (grid file `session:` block, defaults in SESSION_DEFAULTS; also `sessio
   min_conv_iter             minimum convection-loop iterations (HELIOS: 400)
   stitch_flip_limit, stitch_flip_start, stitch_after_iter, stitch_surface: helios_session.StitchPolicy
   write_tp_every            intermediate T-P profiles every n iterations (0: none)
+  tp_coupling_every         write <name>_tp_coupling_<i>.dat every n iterations of the radiation and of the
+                            convection loop (default 100, 0: only the final profile); i = radiation + convection
+                            iterations so far, the final profile has the highest i
   warm_start                none | previous | nearest | <parameter> (next-higher value of that parameter, as for the
                             coupled runner) - from runs of this grid that have a <name>_restart.npz
   init_from                 directory with runs of the same names to start from (e.g. an earlier session grid)
@@ -35,15 +38,18 @@ set per run in `grid` / `cases`, dicts are then merged into the session block's 
   composition_damping       0 <= w < 1: log-VMR relaxation of the composition handed to HELIOS
   vapour_supply             running_max (default: a decrease of a condensible's base VMR with height is taken as
                             condensation and redone by the cold trap) | saturated | base, see column.ColumnModel
-Per-run outputs (<out_dir>/<name>/): HELIOS output, <name>_tp_coupling_0.dat (final T-P, bar/K, full precision),
+Per-run outputs (<out_dir>/<name>/): HELIOS output, <name>_tp_coupling_<i>.dat (T-P, bar/K, full precision,
+every tp_coupling_every iterations; final = highest i),
 <name>_restart.npz, <name>_session.json (convergence, iterations, timings, stitching, grid clamping, column model),
 vertical_mix_0.dat (VMRs along the final profile, mixfile format), species.dat, delad_chelio.dat, run.log,
 <name>_column.dat (column model: per-layer thermodynamics, thresholds, saturation, inhibition).
 """
+import contextlib
 import copy
 import logging
 import os
 import shutil
+import sys
 import time
 
 import numpy as np
@@ -71,6 +77,7 @@ SESSION_DEFAULTS = {
     "stitch_surface": False,
     "stitch_flip_start": 100,
     "write_tp_every": 0,
+    "tp_coupling_every": 100,
     "warm_start": "none",
     "init_from": None,
     # column model
@@ -89,7 +96,7 @@ COLUMN_KEYS = ("chemistry_source", "vmr_callable", "vmr_callable_kwargs", "conde
 # placeholder kappa when the column model computes kappa and c_p itself (HELIOS needs a value at setup)
 DUMMY_KAPPA = 0.2857
 # run parameters of the session runner (passed by run_grid.py like CLI flags of the other runners)
-SESSION_FLAGS = {*run_modes.SIM_PARAMS, "chemistry", "outgas_or_manual", "active_species", "constant_mixing_ratios",
+SESSION_FLAGS = {*run_modes.SIM_PARAMS, "chemistry", "outgas_or_manual", "active_species", "constant_mixing_ratios", "cia_pairs",
                  "relative_humidity", "helios_param_file", *run_modes.CLOUD_PARAMS, run_modes.CLOUD_PATH_PARAM}
 
 
@@ -169,29 +176,65 @@ def build_column_model(settings, sim_p, active, grid, relative_humidity):
                               vapour_supply=settings.get("vapour_supply") or "running_max")
 
 
-def _file_logger(run_dir):
-    handler = logging.FileHandler(os.path.join(run_dir, "run.log"), mode="a")
-    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    logging.getLogger().addHandler(handler)
-    return handler
+class _Tee:
+    """File-like object writing to several streams (HELIOS' print output -> run.log [+ console])."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for s in self.streams:
+            s.write(text)
+        return len(text)
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
 
 
-def run_task(session, name, out_dir, params, config, settings, init=None):
+@contextlib.contextmanager
+def _run_log(run_dir, level=logging.INFO, echo=False):
+    """
+    <run_dir>/run.log for one run, as for the coupled runner: chelio log messages (>= level) and everything HELIOS
+    prints (stdout) go into it; with echo the printed output also still goes to the console.
+    """
+    f = open(os.path.join(run_dir, "run.log"), "a", buffering=1)
+    handler = logging.StreamHandler(f)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    old_level = root.level
+    root.addHandler(handler)
+    root.setLevel(min(level, old_level) if old_level else level)
+    stdout = _Tee(f, sys.stdout) if echo else f
+    try:
+        with contextlib.redirect_stdout(stdout):
+            yield
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(old_level)
+        f.close()
+
+
+def run_task(session, name, out_dir, params, config, settings, init=None, echo=False):
     """
     One run (name, run parameters like the CLI flags of run_coupled.py). Returns the session result dict
-    (raises on errors). Output in <out_dir>/<name>/.
+    (raises on errors). Output in <out_dir>/<name>/; log and HELIOS' printed output in <name>/run.log
+    (echo: printed output also to the console).
     """
     out_root = os.path.join(CHELIO_ROOT, out_dir)
     run_dir = os.path.join(out_root, name)
     os.makedirs(run_dir, exist_ok=True)
-    handler = _file_logger(run_dir)
+    run_log = contextlib.ExitStack()
+    level = getattr(logging, str((config.get("logging") or {}).get("level", "INFO")).upper(), logging.INFO)
+    run_log.enter_context(_run_log(run_dir, level=level, echo=echo))
     try:
         config = copy.deepcopy(config)
         sim_p = config["simulation_params"]
         for key, value in params.items():
             if key == "constant_mixing_ratios" and isinstance(value, str):
                 value = run_modes.parse_mixing_ratios(value)
-            if key in SESSION_FLAGS and key not in ("relative_humidity", "helios_param_file"):
+            if key in SESSION_FLAGS and key not in ("relative_humidity", "helios_param_file", "cia_pairs"):
                 sim_p[key] = value
 
         class _Args:
@@ -218,7 +261,10 @@ def run_task(session, name, out_dir, params, config, settings, init=None):
             p_boa_grid = max(p_boa_grid, p_boa)
         active = species_utils.resolve_active_species(sim_p)
         species_file = os.path.join(run_dir, "species.dat")
-        species_utils.write_species_file(species_file, active, vmrs={s: species_utils.NEGLIGIBLE_VMR for s in active})
+        written = species_utils.write_species_file(species_file, active,
+                                                   vmrs={s: species_utils.NEGLIGIBLE_VMR for s in active},
+                                                   cia_pairs=species_utils.parse_cia_pairs(params.get("cia_pairs")))
+        log.info(f"Species file: {', '.join(written)}")
 
         grid_opts = {"dT": settings["chem_dT"], "t_min": settings["chem_t_min"], "t_max": settings["chem_t_max"],
                      "p_spacing": settings["chem_p_spacing"], "eqcond": settings["chem_eqcond"]}
@@ -274,6 +320,7 @@ def run_task(session, name, out_dir, params, config, settings, init=None):
             helios_params, vmr_provider=None if use_column else grid.provider(), column_model=column_model, init=init,
             cold_start_temperature=settings["cold_start_temperature"], min_conv_iter=settings["min_conv_iter"],
             rad_max_iter=settings["rad_max_iter"], write_tp_every=settings["write_tp_every"],
+            tp_coupling_every=settings["tp_coupling_every"],
             stitch_flip_limit=settings["stitch_flip_limit"], stitch_after_iter=settings["stitch_after_iter"],
             stitch_surface=settings["stitch_surface"], stitch_flip_start=settings["stitch_flip_start"],
         )
@@ -291,9 +338,11 @@ def run_task(session, name, out_dir, params, config, settings, init=None):
         log.info(f"{name}: converged={result['converged']}, rad_iter={result['rad_iter']}, conv_iter={result['conv_iter']}, "
                  f"{result['t_total_s']:.0f} s (setup {result['t_setup_s']:.0f} s)")
         return result
+    except Exception:
+        log.exception(f"Session run {name} failed")
+        raise
     finally:
-        logging.getLogger().removeHandler(handler)
-        handler.close()
+        run_log.close()
 
 
 def write_vertical_mix(path, species, vmr_profile, profile):
@@ -377,8 +426,9 @@ def choose_warm_start(mode, task, tasks, out_dir, completed):
 class SessionGridRunner:
     """Runs the tasks of a `runner: session` grid one after another in one HeliosSession (created on first use)."""
 
-    def __init__(self, spec, tasks, report=print):
+    def __init__(self, spec, tasks, report=print, verbose=False):
         self.spec = spec
+        self.verbose = verbose  # HELIOS' printed output also to the console (always in the run's run.log)
         self.tasks = tasks
         self.report = report
         self.config = load_config(os.path.join(CHELIO_ROOT, spec["config"]) if spec.get("config") else None)
@@ -410,9 +460,8 @@ class SessionGridRunner:
             params["helios_param_file"] = self.spec["helios_param"]
         try:
             result = run_task(self.session, task.name, self.out_dir, params, self.config,
-                              task_settings(self.settings, params), init=init)
-        except Exception as e:
-            log.exception(f"Session run {task.name} failed")
+                              task_settings(self.settings, params), init=init, echo=self.verbose)
+        except Exception as e:  # traceback in the run's run.log
             return "failed", e
         self.completed.append(task.name)
         return "done", result

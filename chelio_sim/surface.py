@@ -158,13 +158,20 @@ def fixed_inventory(species, p_inventory):
     return target
 
 
-def ocean_plus_inventory(condensible, p_inventory, rh=1.0):
-    """p_s = p_inventory + RH p_sat,c(T_surf) [dyn/cm^2]: a dilute-limit ocean over a fixed background (simple test)."""
+def ocean_plus_inventory(condensible, p_inventory, rh=1.0, p_ocean=None):
+    """
+    p_s = p_inventory + min(RH p_sat,c(T_surf), p_ocean) [dyn/cm^2]: a dilute-limit ocean over a fixed background
+    (simple test). p_ocean (optional): the whole ocean as vapour (e.g. 2.7e8 = 270 bar for Earth's oceans); once
+    RH p_sat exceeds it (also above the critical temperature, where p_sat = inf) the ocean is gone and the vapour
+    pressure stays at p_ocean. The composition is not changed by this (the condensible stays capped by RH p_sat).
+    """
     from chelio_sim.thermo import Condensible
     c = Condensible(condensible, rh=rh)
     p_inv = float(p_inventory)
+    p_oc = np.inf if p_ocean is None else float(p_ocean)
 
     def target(state):
-        return p_inv + c.rh * float(c.p_sat(np.array([state.T_surf]))[0])
-    target.__qualname__ = f"ocean_plus_inventory({condensible},{p_inv:g}dyn/cm2,RH={rh:g})"
+        return p_inv + min(c.rh * float(c.p_sat(np.array([state.T_surf]))[0]), p_oc)
+    target.__qualname__ = (f"ocean_plus_inventory({condensible},{p_inv:g}dyn/cm2,RH={rh:g}"
+                           + (f",ocean={p_oc:g}dyn/cm2)" if np.isfinite(p_oc) else ")"))
     return target

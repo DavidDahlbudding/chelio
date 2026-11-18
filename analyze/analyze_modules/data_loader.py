@@ -1,3 +1,4 @@
+import re
 import numpy as np
 from pathlib import Path
 import warnings
@@ -17,6 +18,28 @@ def _format_CtoO_float(f):
         return f"{f:.1f}"
     else:
         return f"{f:.10g}"
+
+def find_iteration_files(run_path, regex) -> List[tuple]:
+    """
+    (i, path) of all files in run_path whose name fully matches `regex` (one group: the integer i, may be negative),
+    sorted numerically by i - independent of gaps or uneven spacing between the i (e.g. -1, 0, 100, 250, 1300).
+    """
+    run_path = Path(run_path)
+    if not run_path.is_dir():
+        return []
+    pattern = re.compile(regex)
+    found = []
+    for f in run_path.iterdir():
+        m = pattern.fullmatch(f.name)
+        if m:
+            found.append((int(m.group(1)), f))
+    return sorted(found, key=lambda x: x[0])
+
+
+def tp_coupling_files(run_path, run_name) -> List[tuple]:
+    """All (i, path) of <run_name>_tp_coupling_<i>.dat, sorted by i (-1 = initial guess of coupled runs)."""
+    return find_iteration_files(run_path, rf"{re.escape(run_name)}_tp_coupling_(-?\d+)\.dat")
+
 
 def _build_run_name(params: Dict[str, Any]) -> str:
     """
@@ -76,6 +99,14 @@ class ChelioRun:
         self.mus: np.ndarray = np.array([])
         self.convective_flags: np.ndarray = np.array([])
 
+        # T-P profiles of the <run_name>_tp_coupling_<i>.dat files, sorted by i (load_mode 'all': all files,
+        # otherwise only the one with the highest i). Coupled runs: i = coupling iteration (-1 = initial guess);
+        # session runs: i = HELIOS iterations so far (every tp_coupling_every steps, final = highest i).
+        # Rows are padded with NaN if the number of levels differs (BOA first, as in the files).
+        self.tp_iterations: np.ndarray = np.array([], dtype=int)
+        self.tp_pressures_bar: np.ndarray = np.array([])
+        self.tp_temperatures_K: np.ndarray = np.array([])
+
         # Iteration-specific converted data
         self.is_converted = False
         self.atoms_vmr: np.ndarray = np.array([])
@@ -95,23 +126,18 @@ class ChelioRun:
         1. Standard format with Static_Conc files (full chemistry data)
         2. Minimal format with only vertical_mix files (VMR-only data)
         """
-        # First, determine available iterations by checking vertical_mix files
-        i = 0
-        last_valid_i = -1
-        while True:
-            conc_path = self.run_path / f"vertical_mix_{i}.dat"
-            if not conc_path.exists():
-                break
-            last_valid_i = i
-            i += 1
-        
-        if last_valid_i == -1 and self.load_mode in ['last', 'final', 'all']:
+        self.read_tp_profiles()
+
+        # First, determine available iterations from the vertical_mix_<i> files (sorted by i, gaps allowed)
+        available = [i for i, _ in find_iteration_files(self.run_path, r"vertical_mix_(-?\d+)\.dat")]
+
+        if not available and self.load_mode in ['last', 'final', 'all']:
             print(f"No valid data found for run {self.run_name}")
             self._populate_with_nan()
             return
-            
+
         # Determine which iterations to load
-        indices_to_load = self._determine_indices_to_load(last_valid_i)
+        indices_to_load = self._determine_indices_to_load(available)
         if indices_to_load is None:
             return
         
@@ -125,15 +151,43 @@ class ChelioRun:
             # Minimal format: read from vertical_mix files only
             self._read_from_vertical_mix_only(indices_to_load, ref_p_toa)
 
-    def _determine_indices_to_load(self, last_valid_i):
-        """Determine which iteration indices to load based on load_mode."""
+    def read_tp_profiles(self, mode=None):
+        """
+        Reads the <run_name>_tp_coupling_<i>.dat files, ordered by i whatever their spacing, into tp_iterations,
+        tp_pressures_bar and tp_temperatures_K. mode: 'all' (default for load_mode 'all') or 'last' (otherwise).
+        """
+        mode = mode or ('all' if self.load_mode == 'all' else 'last')
+        files = tp_coupling_files(self.run_path, self.run_name)
+        if mode != 'all':
+            files = files[-1:]
+        iterations, profiles = [], []
+        for i, path in files:
+            try:
+                d = np.loadtxt(path, skiprows=1, usecols=(0, 1), ndmin=2)
+            except (ValueError, IndexError, OSError) as e:
+                warnings.warn(f"Failed to read {path.name}: {e}")
+                continue
+            if d.size == 0:
+                continue
+            iterations.append(i)
+            profiles.append(d)
+        self.tp_iterations = np.array(iterations, dtype=int)
+        n = max((d.shape[0] for d in profiles), default=0)
+        self.tp_pressures_bar = np.full((len(profiles), n), np.nan)
+        self.tp_temperatures_K = np.full((len(profiles), n), np.nan)
+        for k, d in enumerate(profiles):
+            self.tp_pressures_bar[k, :d.shape[0]] = d[:, 0]
+            self.tp_temperatures_K[k, :d.shape[0]] = d[:, 1]
+
+    def _determine_indices_to_load(self, available):
+        """Determine which iteration indices to load based on load_mode (available: sorted existing indices)."""
         if self.load_mode == 'last' or self.load_mode == 'final':
-            return [last_valid_i]
+            return [available[-1]]
         elif self.load_mode == 'all':
-            return list(range(last_valid_i + 1))
+            return list(available)
         elif isinstance(self.load_mode, int):
-            if self.load_mode > last_valid_i:
-                raise ValueError(f"Invalid load_mode: Index to load ({self.load_mode}) > last valid index ({last_valid_i})")
+            if self.load_mode not in available:
+                raise ValueError(f"Invalid load_mode: no vertical_mix_{self.load_mode}.dat (available: {available})")
             return [self.load_mode]
         elif isinstance(self.load_mode, str):
             return [self.load_mode]

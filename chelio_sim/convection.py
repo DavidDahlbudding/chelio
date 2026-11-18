@@ -26,6 +26,7 @@ layer). convective_adjustment caps its loop (HELIOS has no cap).
 """
 import logging
 from dataclasses import dataclass, fields
+from typing import Optional
 
 import numpy as np
 
@@ -51,12 +52,19 @@ class ConvectionSettings:
     semiconvection   onset_only (Ledoux for onset, target for pairs that are already convective) | strict
     multi            sum | dominant (pseudoadiabat with all saturated condensibles, or only the dominant one)
     thermo_source    host (c_p, kappa from the column model) | table (HELIOS' kappa table, dry only; regression)
+    kappa            None (default) | constant dry adiabatic exponent R/c_p (e.g. 0.285714 = 2/7, HELIOS'
+                     `kappa value` as number): with thermo_source host, every target is this exponent and
+                     c_p = R / kappa in every layer (no JANAF c_p); dry only (moist and inhibition must be false).
+                     For reproducing runs made with HELIOS' constant kappa (e.g. Dahlbuedding et al. 2026)
     inhibition_hysteresis   inhibited if Gamma > 1 + h, released if Gamma < 1 - h
     moist_tolerance  a convective pair with a moist target stays convective unless its upper layer is more than this
                      fraction (relative T) warmer than the target allows (HELIOS: ~1e-6 in the exponent, kept for dry
                      pairs). Moist targets depend strongly on T (near the lifting condensation level the half-layer
                      exponent mixes dry and moist parts and moves with the LCL), so the flux-balance shift of a zone's
                      temperature changes them by far more than 1e-6 and moist zones would fall apart.
+                     Default 1e-4 (was 1e-3 until 2026-11-17: in Earth-like runs, grids/test_earth_moist/, it let
+                     the top of a moist zone overshoot and leave a single cold layer, up to 20 K below the layer
+                     above, that set the cold trap; <= 1e-5 broke the moist zones apart again at S/S0 = 1.2).
     unfreeze         a layer that has been radiative for `adapt_interval` iterations with HELIOS' adaptive time-step
                      prefactor below 1e-5 (it decays while the layer is convective, so the layer is frozen) gets the
                      prefactor 1e-3 (as HELIOS does for all layers at iteration 6000)
@@ -71,8 +79,9 @@ class ConvectionSettings:
     semiconvection: str = "onset_only"
     multi: str = "sum"
     thermo_source: str = "host"
+    kappa: Optional[float] = None
     inhibition_hysteresis: float = 0.02
-    moist_tolerance: float = 1e-3
+    moist_tolerance: float = 1e-4
     unfreeze: bool = True
     max_adjust_iter: int = 1000
     parcel_substeps: int = 2
@@ -101,13 +110,20 @@ class ConvectionSettings:
             raise ValueError("convection.jump_width must be in (0, 2] (ln p)")
         if not 0 <= self.moist_tolerance < 0.1:
             raise ValueError("convection.moist_tolerance must be in [0, 0.1)")
+        if self.kappa is not None:
+            if not 0 < float(self.kappa) < 1:
+                raise ValueError(f"convection.kappa must be in (0, 1), got {self.kappa!r}")
+            if self.thermo_source != "host" or self.moist or self.inhibition:
+                raise ValueError("convection.kappa (constant dry adiabat) needs thermo_source host, moist: false and "
+                                 "inhibition: false")
         if int(self.parcel_substeps) < 1 or int(self.max_adjust_iter) < 1:
             raise ValueError("convection.parcel_substeps and max_adjust_iter must be >= 1")
 
     def label(self):
         inh = f"{int(self.inhibition)}" + (f"({self.inhibition_mode})" if self.inhibition else "")
         return (f"{self.criterion},moist={int(self.moist)},inhibition={inh},"
-                f"semiconv={self.semiconvection},multi={self.multi},thermo={self.thermo_source}")
+                f"semiconv={self.semiconvection},multi={self.multi},thermo={self.thermo_source}"
+                + (f",kappa={self.kappa:g}" if self.kappa is not None else ""))
 
 
 # --- HELIOS-equivalent functions with separate threshold and target ---

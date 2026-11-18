@@ -389,6 +389,14 @@ def _make_compute_class(h):
             super().__init__()
             self.session = session
 
+        # chelio: hook into HELIOS' (unchanged) radiation loop, which calls this once per iteration (from
+        # iteration `foreplay` on) with the temperatures of the current iteration on the device
+        def rad_temp_iteration(self, quant):
+            every = self.session._run_opts.get("tp_coupling_every") or 0
+            if every and quant.iter_value % every == 0:
+                self.session._write_tp_coupling(quant, quant.chelio_reader)
+            super().rad_temp_iteration(quant)
+
         # chelio: device-cached species opacities (stock: re-uploaded every call, i.e. every 10th iteration)
         def calculate_total_opacity_and_scat_cross_sections_from_species(self, quant):
             for s in range(len(quant.species_list)):
@@ -677,6 +685,11 @@ def _make_compute_class(h):
                         if quant.iter_value > 99:
                             print("Time for the last 100 steps [s]: {:.2f}".format(time_loop * 1e-3))
 
+                    # chelio: <name>_tp_coupling_<rad. + conv. iterations>.dat at the start of every n-th iteration
+                    every_tp = opts.get("tp_coupling_every") or 0
+                    if every_tp and quant.iter_value % every_tp == 0:
+                        self.session._write_tp_coupling(quant, read)
+
                     self.interpolate_temperatures(quant)
 
                     if quant.iter_value % 10 == 0:
@@ -889,6 +902,23 @@ class HeliosSession:
             self._device_cache_bytes += dev.nbytes
         return dev
 
+    @staticmethod
+    def _tp_coupling_path(run_dir, name, index):
+        return os.path.join(run_dir, f"{name}_tp_coupling_{int(index)}.dat")
+
+    @staticmethod
+    def _save_tp(path, p_int, p_lay, T_lay, nlayer):
+        """T-P file in the format of the fork's coupling output (BOA first; bar, K), full precision."""
+        p = np.concatenate(([p_int[0]], p_lay)) * 1e-6
+        T = np.concatenate(([T_lay[nlayer]], T_lay[:nlayer]))
+        np.savetxt(path, np.column_stack([p, T]), fmt="%-24.12e%.12e", header=f"{'press.[bar]':<24}temp.[K]", comments="")
+
+    def _write_tp_coupling(self, quant, read):
+        """<name>_tp_coupling_<i>.dat of the current profile, i = iterations so far (radiation + convection loop)."""
+        index = self._run_opts.get("iter_offset", 0) + int(quant.iter_value)
+        self._save_tp(self._tp_coupling_path(os.path.join(read.output_path, quant.name), quant.name, index),
+                      quant.p_int, quant.p_lay, np.array(quant.dev_T_lay.get(), float), quant.nlayer)
+
     def _write_intermediate_tp(self, quant, read, phase):
         T = quant.dev_T_lay.get()
         directory = os.path.join(read.output_path, quant.name, f"{quant.name}_tp_iter")
@@ -914,7 +944,7 @@ class HeliosSession:
         return args
 
     def run(self, params, vmr_provider=None, vmr_species=None, init=None, cold_start_temperature=COLD_START_TEMPERATURE,
-            min_conv_iter=HELIOS_MIN_CONV_ITER, rad_max_iter=None, write_tp_every=0,
+            min_conv_iter=HELIOS_MIN_CONV_ITER, rad_max_iter=None, write_tp_every=0, tp_coupling_every=0,
             stitch_flip_limit=STITCH_FLIP_LIMIT, stitch_after_iter=HELIOS_STITCH_AFTER_ITER, stitch_surface=False,
             stitch_flip_start=STITCH_FLIP_START, column_model=None):
         """
@@ -929,6 +959,11 @@ class HeliosSession:
         init: earlier solution (see load_initial_state) for a warm start; None = isothermal cold start
         rad_max_iter: cold start only, cap of the radiation-only loop; then continue with the convection loop
             (the fork's started_convection behaviour). Default: maximum_number_of_iterations.
+        write_tp_every: write <name>_tp_iter/{rad,conv}_<iter>.dat every n iterations (0: never)
+        tp_coupling_every: write <name>_tp_coupling_<i>.dat every n iterations of the radiation and of the convection
+            loop (0: never); i counts radiation + convection iterations (0 = start profile), the final profile is
+            <name>_tp_coupling_<total iterations>.dat (always written, highest i). Older <name>_tp_coupling_*.dat of
+            the run are deleted at the start.
         stitch_flip_limit, stitch_after_iter, stitch_surface, stitch_flip_start: StitchPolicy (stitch_flip_limit None and
             stitch_after_iter 5000 = HELIOS)
         Returns a dict with convergence, iteration counts, timings, the final profile and stitching info,
@@ -964,6 +999,13 @@ class HeliosSession:
         try:
             with _in_dir(HELIOS_PATH), _argv(self.helios_args(params)):
                 reader.read_param_file_and_command_line(keeper, fogger)
+                # chelio: T-P files of an earlier attempt of this run would mix with (and outnumber) the new ones
+                old_dir = os.path.join(reader.output_path, keeper.name)
+                if os.path.isdir(old_dir):
+                    for f in os.listdir(old_dir):
+                        if f.startswith(f"{keeper.name}_tp_coupling_") and f.endswith(".dat") \
+                                and os.path.join(old_dir, f) != os.path.abspath(str(init)):
+                            os.remove(os.path.join(old_dir, f))
 
                 if keeper.opacity_mixing == "premixed":
                     reader.load_premixed_opacity_table(keeper)
@@ -1008,6 +1050,7 @@ class HeliosSession:
                 keeper.chelio_diag = {"history": []}
                 keeper.chelio_inputs = inputs
                 self._run_opts = {"min_conv_iter": min_conv_iter, "write_tp_every": write_tp_every,
+                                  "tp_coupling_every": tp_coupling_every, "iter_offset": 0,
                                   "warm_conv_layer": warm_conv if init_state else None}
                 t_setup = time.time()
 
@@ -1023,6 +1066,7 @@ class HeliosSession:
                         keeper.max_nr_iterations = np.int32(rad_max_iter)
                     self.compute.radiation_loop(keeper, writer, reader, plotter)
                     rad_iter = int(keeper.iter_value)
+                    self._run_opts["iter_offset"] = rad_iter  # T-P file numbering continues in the convection loop
                     keeper.max_nr_iterations = saved_max
                     if write_tp_every:
                         self._write_intermediate_tp(keeper, reader, "rad")
@@ -1138,11 +1182,11 @@ class HeliosSession:
                  conv_layer=conv_layer, internal_temperature=float(keeper.T_intern), g=float(keeper.g),
                  inputs=json.dumps(keeper.chelio_inputs))
 
-        # T-P file in the format of the fork's coupling output (bar, K), full precision
+        # final T-P file (format of the fork's coupling output, full precision) with the highest index
+        final_index = self._run_opts.get("iter_offset", 0) + int(keeper.chelio_conv_iter)
         p = np.concatenate(([p_int[0]], p_lay)) * 1e-6
         T = np.concatenate(([T_lay[n]], T_lay[:n]))
-        np.savetxt(os.path.join(run_dir, f"{keeper.name}_tp_coupling_0.dat"), np.column_stack([p, T]),
-                   fmt="%-24.12e%.12e", header=f"{'press.[bar]':<24}temp.[K]", comments="")
+        self._save_tp(self._tp_coupling_path(run_dir, keeper.name, final_index), p_int, p_lay, T_lay, n)
 
         policy = keeper.chelio_stitch
         stitched_final = sorted(policy.filled_now)
@@ -1166,6 +1210,7 @@ class HeliosSession:
             "t_setup_s": round(t_setup - t0, 2),
             "t_loops_s": round(t_loops - t_setup, 2),
             "t_total_s": round(time.time() - t0, 2),
+            "final_tp_index": final_index,
             "T_surface": float(T_lay[n]),
             "T_min": float(T_lay.min()),
             "T_max": float(T_lay.max()),

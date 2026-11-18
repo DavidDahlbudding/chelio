@@ -41,6 +41,15 @@ Saturation-pressure branches: the formulas of mixfile_utils.p_sat (= GGchem Dust
   - below `t_floor` (half the triple-point temperature) a Clausius-Clapeyron extrapolation with constant L
     (the Antoine fits diverge at T = -C).
 N2, CO, CH4 use their liquid fits below the triple point too (as GGchem does).
+H2O: ice (Ackerman & Marley 2001) below 250 K, liquid (Yaws) above the triple point 273.16 K and a smooth mixed-phase
+blend in between (H2O_MIXED_PHASE): ln p_sat = (1 - w) ln p_ice + w ln p_liq with the smoothstep w = s^2 (3 - 2 s),
+s = (T - 250 K) / (273.16 K - 250 K), so p_sat and xi are continuous (C1 in ln p) and L goes smoothly from sublimation
+to vaporisation. Without it xi jumps by 13 % at the triple point (22.5 -> 19.9, L_sub -> L_vap), the moist
+pseudoadiabat has a kink there, and a layer at ~273 K made HELIOS' convective adjustment alternate between two states
+every iteration (zone split at that layer, fudge factor 1 +/- 2e-5), so Earth-like runs with T_surf ~ 300 K never
+converged (grids/test_earth_moist/test_diag_psurf.yaml, 2026-11-17). Ding & Pierrehumbert (2016) avoid the kink with
+one condensate phase (L linear in T, their eq. 1); the blend keeps ice saturation for the cold trap (the usual GCM
+mixed-phase treatment). mixfile_utils.p_sat (chemistry grids, legacy runner) keeps the sharp ice/liquid switch.
 """
 import argparse
 import logging
@@ -83,6 +92,21 @@ def _inverse_poly_ln_bar(*a):
     return f
 
 
+def _smooth_blend(f_lo, f_hi, T0, T1):
+    """ln p = (1 - w) ln p_lo + w ln p_hi, w = smoothstep((T - T0) / (T1 - T0)); xi includes the dw/dlnT term, so xi is
+    continuous at T0 and T1 (dw/dT = 0 there)."""
+    def f(T):
+        lnp_lo, xi_lo = f_lo(T)
+        lnp_hi, xi_hi = f_hi(T)
+        s = np.clip((T - T0) / (T1 - T0), 0.0, 1.0)
+        w = s * s * (3.0 - 2.0 * s)
+        dwdT = 6.0 * s * (1.0 - s) / (T1 - T0)
+        lnp = (1.0 - w) * lnp_lo + w * lnp_hi
+        xi = (1.0 - w) * xi_lo + w * xi_hi + T * dwdT * (lnp_hi - lnp_lo)
+        return lnp, xi
+    return f
+
+
 def _h2o_ice_am01(T):
     """Ackerman & Marley (2001) ice: p = 6111.5 exp((23.036 TC - TC^2/333.7) / (TC + 279.82)) dyn/cm^2"""
     a, b, c = 23.036, 333.7, 279.82
@@ -94,12 +118,17 @@ def _h2o_ice_am01(T):
     return lnp, T * dfdT
 
 
+# H2O: liquid fit (Yaws) and the mixed-phase range [K] in which ice and liquid are blended (see module docstring)
+_H2O_LIQUID = _yaws(29.8605, -3.1522e3, -7.3037, 2.4247e-9, 1.8090e-6)
+H2O_MIXED_PHASE = (250.0, 273.16)
+
 # species: molar mass from HELIOS (species_lib) at runtime; here: critical T, triple T, branches (T_upper, func)
 # branches are ordered by T; a branch applies below its T_upper (the last one up to T_crit)
 CONDENSIBLE_DATA = {
     "H2O": {"T_crit": 647.1, "T_triple": 273.16,
-            "branches": [(273.16, _h2o_ice_am01),
-                         (np.inf, _yaws(29.8605, -3.1522e3, -7.3037, 2.4247e-9, 1.8090e-6))]},
+            "branches": [(H2O_MIXED_PHASE[0], _h2o_ice_am01),
+                         (H2O_MIXED_PHASE[1], _smooth_blend(_h2o_ice_am01, _H2O_LIQUID, *H2O_MIXED_PHASE)),
+                         (np.inf, _H2O_LIQUID)]},
     "CO2": {"T_crit": 304.19, "T_triple": 216.58,
             "branches": [(216.58, _inverse_poly_ln_bar(1.476e1, -2.571e3, -7.781e4, 4.325e6, -1.207e8, 1.350e9)),
                          (np.inf, _yaws(35.0187, -1.5119e3, -11.335, 9.3383e-3, 7.7626e-10))]},
@@ -322,6 +351,8 @@ def _check(verbose=True):
     for name, (t0, t1) in ranges.items():
         c = Condensible(name)
         T = np.linspace(t0, t1, 400)
+        if name == "H2O":  # mixfile_utils keeps the sharp ice/liquid switch
+            T = T[(T < H2O_MIXED_PHASE[0]) | (T >= H2O_MIXED_PHASE[1])]
         ref = mixfile_utils.p_sat(T, name)
         rel = np.max(np.abs(c.p_sat(T) / ref - 1))
         report(f"p_sat {name} = mixfile_utils.p_sat ({t0}-{t1} K)", rel < 1e-10, f"max rel. diff {rel:.1e}")
@@ -330,6 +361,22 @@ def _check(verbose=True):
         num = (np.log(c.p_sat(Tn * (1 + h))) - np.log(c.p_sat(Tn * (1 - h)))) / (np.log(1 + h) - np.log(1 - h))
         rel = np.max(np.abs(c.xi(Tn) / num - 1))
         report(f"xi {name} analytic = numerical", rel < 1e-5, f"max rel. diff {rel:.1e}")
+
+    # 1b. H2O mixed-phase blend: p_sat and xi continuous at both ends, between ice and liquid inside, xi = numerical
+    w = Condensible("H2O")
+    eps = 1e-7
+    for Tb in H2O_MIXED_PHASE:
+        (l0, l1), (x0, x1) = w.ln_psat_xi(np.array([Tb - eps, Tb + eps]))
+        report(f"H2O blend: p_sat, xi continuous at {Tb} K", abs(l1 - l0) < 1e-6 and abs(x1 - x0) < 1e-4,
+               f"d ln p {l1 - l0:.1e}, d xi {x1 - x0:.1e}")
+    Tm = np.linspace(H2O_MIXED_PHASE[0] + 0.01, H2O_MIXED_PHASE[1] - 0.01, 200)
+    li, ll = _h2o_ice_am01(Tm)[0], _H2O_LIQUID(Tm)[0]
+    lb = w.ln_psat_xi(Tm)[0]
+    report("H2O blend: ln p_sat between ice and liquid", np.all((lb - np.minimum(li, ll) > -1e-12) & (np.maximum(li, ll) - lb > -1e-12)))
+    h = 1e-5
+    num = (np.log(w.p_sat(Tm * (1 + h))) - np.log(w.p_sat(Tm * (1 - h)))) / (np.log(1 + h) - np.log(1 - h))
+    rel = np.max(np.abs(w.xi(Tm) / num - 1))
+    report("H2O blend: xi analytic = numerical", rel < 1e-6, f"max rel. diff {rel:.1e}")
 
     # 2. CO2 solid branch: 1 atm at 194.7 K (sublimation point), close to the liquid fit at the triple point
     c = Condensible("CO2")

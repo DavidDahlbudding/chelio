@@ -105,9 +105,29 @@ def resolve_active_species(sim_p, outgassed_vmrs=None):
     return [s for s in molecules if s in selected]
 
 
-def write_species_file(path, active, vmrs=None):
+def parse_cia_pairs(value):
     """
-    Writes the HELIOS species file for the active species plus the CIA pairs whose partners are both active.
+    CIA pair selection: None / "auto" -> None (all pairs whose partners are active), otherwise a set of catalog
+    names, e.g. "H2-H2,H2-CH4" or "CIA_H2H2" or ["H2H2"] -> {"CIA_H2H2", "CIA_H2CH4"}; "none" -> empty set.
+    """
+    if value is None or (isinstance(value, str) and value.strip().lower() == "auto"):
+        return None
+    if isinstance(value, str):
+        if value.strip().lower() == "none":
+            return set()
+        value = value.split(",")
+    names = set()
+    for v in value:
+        v = str(v).strip().replace("-", "")
+        if v:
+            names.add(v if v.startswith("CIA_") else f"CIA_{v}")
+    return names
+
+
+def write_species_file(path, active, vmrs=None, cia_pairs=None):
+    """
+    Writes the HELIOS species file for the active species plus the CIA pairs whose partners are both active
+    (with `cia_pairs`, a set from parse_cia_pairs, only those of them).
 
     With `vmrs` (species -> constant VMR) the mixing ratios are written into the file instead of
     pointing HELIOS to the vertical mixing ratio file.
@@ -115,6 +135,10 @@ def write_species_file(path, active, vmrs=None):
     """
     header, catalog = read_catalog()
     molecules = [s for s in catalog if not s.startswith("CIA_")]
+    if cia_pairs is not None:
+        unknown = set(cia_pairs) - set(catalog)
+        if unknown:
+            raise ValueError(f"cia_pairs {sorted(unknown)} not in {CATALOG_PATH}")
     written = []
     with open(path, "w") as f:
         f.write(header + "\n\n")
@@ -122,6 +146,8 @@ def write_species_file(path, active, vmrs=None):
             if species.startswith("CIA_"):
                 partners = cia_partners(species, molecules)
                 if not all(p in active for p in partners):
+                    continue
+                if cia_pairs is not None and species not in cia_pairs:
                     continue
                 vmr_text = "&".join(f"{vmrs[p]:.5e}" for p in partners) if vmrs else None
             elif species in active:
