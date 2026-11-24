@@ -92,6 +92,21 @@ def _inverse_poly_ln_bar(*a):
     return f
 
 
+def _clausius(T_ref, p_ref_pa, dH_kj):
+    """Clausius-Clapeyron with constant enthalpy through (T_ref, p_ref): ln p = ln p_ref - dH/R (1/T - 1/T_ref)."""
+    a = dH_kj * 1e3 * J_TO_ERG / R          # dH / R [K]
+    lnp_ref = np.log(p_ref_pa * 10.0)       # Pa -> dyn/cm^2
+
+    def f(T):
+        return lnp_ref - a * (1.0 / T - 1.0 / T_ref), a / T
+    return f
+
+
+def _clausius_triple(T_t, p_t_pa, dH_sub_kj, dH_vap_kj):
+    """Sublimation below / vaporisation above the triple point, both through (T_t, p_t): continuous p_sat."""
+    return [(T_t, _clausius(T_t, p_t_pa, dH_sub_kj)), (np.inf, _clausius(T_t, p_t_pa, dH_vap_kj))]
+
+
 def _smooth_blend(f_lo, f_hi, T0, T1):
     """ln p = (1 - w) ln p_lo + w ln p_hi, w = smoothstep((T - T0) / (T1 - T0)); xi includes the dw/dlnT term, so xi is
     continuous at T0 and T1 (dw/dT = 0 there)."""
@@ -139,6 +154,17 @@ CONDENSIBLE_DATA = {
            "branches": [(np.inf, _yaws(51.8145, -7.8824e2, -22.734, 5.1225e-2, 4.6603e-11))]},
     "O2": {"T_crit": 154.33, "T_triple": 54.36, "branches": [(np.inf, _antoine10(3.9523, 340.024, -4.144))]},
     "H2": {"T_crit": 33.2, "T_triple": 13.8033, "branches": [(np.inf, _antoine10(3.54314, 99.395, 7.726))]},
+    # Trace gases (2026-11-24, for cold traps of lightning / volcanic species): Clausius-Clapeyron from the triple
+    # point with constant dH_sub below / dH_vap above (NIST webbook, CRC; approximate, a few 10 % in p_sat far from
+    # T_triple). Same values as claude-scratch/trace_opacities/traceopac.py. NO2 is treated via its condensed dimer
+    # N2O4 and is the roughest.                    T_t [K]  p_t [Pa]  dH_sub  dH_vap [kJ/mol]
+    "NO": {"T_crit": 180.0, "T_triple": 109.5, "branches": _clausius_triple(109.5, 21.9e3, 16.1, 13.8)},
+    "NO2": {"T_crit": 431.1, "T_triple": 261.9, "branches": _clausius_triple(261.9, 14.7e3, 52.8, 38.1)},
+    "N2O": {"T_crit": 309.6, "T_triple": 182.33, "branches": _clausius_triple(182.33, 87.85e3, 23.0, 16.5)},
+    "SO2": {"T_crit": 430.7, "T_triple": 197.64, "branches": _clausius_triple(197.64, 1.67e3, 32.3, 24.9)},
+    "H2S": {"T_crit": 373.1, "T_triple": 187.7, "branches": _clausius_triple(187.7, 23.3e3, 21.0, 18.7)},
+    "HCN": {"T_crit": 456.7, "T_triple": 259.8, "branches": _clausius_triple(259.8, 18.6e3, 33.6, 25.2)},
+    "C2H2": {"T_crit": 308.3, "T_triple": 192.4, "branches": _clausius_triple(192.4, 126e3, 22.0, 16.7)},
 }
 # species that "condensibles: auto" picks from the active species (H2 only condenses below 33 K)
 AUTO_CONDENSIBLES = ("H2O", "CO2", "CH4", "NH3", "N2", "CO", "O2")

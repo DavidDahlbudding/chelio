@@ -1,0 +1,64 @@
+# Trace gases from lightning / volcanism in tidally heated FFP-exomoon atmospheres (10 bar), session runner +
+# column model, constant chemistry (no GGchem), cold traps for all condensibles incl. the trace gas.
+# Motivation and literature abundances: claude-scratch/trace_opacities/README.md.
+#
+#   reduced:  H2 filler, (C+O)/(H+C+O) = 1e-2, C/O = 0.59 (all C in CH4, all O in H2O, as c_plus_o_constant_mixing)
+#             + H2S or C2H2 at a medium / high VMR
+#   oxidized: 90 % CO2 + 10 % N2 (of the dry gas), H2O capped at 1 % (base H2O 0.01, cold-trapped at RH = 1, the removed
+#             vapour goes to CO2/N2 in proportion) + SO2 or N2O at a medium / high VMR
+#   + one baseline without trace gas per atmosphere (trace: none) for the comparison.
+# trace_vmr is relative to the dry gas (derive hook trace_gas_mixing). The trace gas is a condensible too
+# (thermo.CONDENSIBLE_DATA, Clausius-Clapeyron from the triple point), so it is capped by the running minimum of
+# p_sat/p from the surface up (cold trap).
+# Convection: dry adiabat everywhere (Schwarzschild, c_p of the mixture from JANAF; cold traps kept), for the comparison
+# with the earlier dry-adiabat runs; no condensation inhibition.
+# Local tests at T_int = 250 K (grids/test_trace_ox250_*.yaml): the moist column with an unlimited ocean (base H2O 0.99)
+# never converged (17 % H2O at 388 K, whole-column jitter, global
+# imbalance stuck at ~1e-2 with surface stitching and composition damping 0.5/0.8); the dry adiabat converged in 3 min but
+# with unlimited water runs away to a steam atmosphere (589 K, 99 % H2O) -> dry adiabat with H2O capped at 1 %.
+# T_int sweep 250 ... 75 K (reduced, local test: T_int = 100 K -> T_surf = 301 K).
+# Oxidized at low T_int: 90 % CO2 at 10 bar needs T_surf > 231 K, otherwise CO2 condenses down to the surface and
+# the cold trap leaves an N2 atmosphere (CO2 3.6 % at the surface, ~1e-21 aloft at T_int = 150 K, local test); the
+# total pressure stays 10 bar (no CO2 surface reservoir / variable p_surf here).
+#
+# Run from the chelio root:  python3 run_grid.py grids/trace_gases_10bar.yaml [--dry-run] [--only atm=red]
+# Slurm:                     sbatch chelio/test_slurm/trace_gases_10bar.sbatch
+runner: session
+out_dir: output/trace_gases_10bar
+name: "{atm}_P0={psurf_bar}bar_Tint={internal_temp}_{trace_name}"
+
+session:
+  chemistry_source: constant_exact
+  convection: {criterion: schwarzschild, moist: false, inhibition: false}   # dry adiabat (JANAF c_p), all cases
+  max_iter: 15000
+  warm_start: internal_temp  # start from the same composition at the next-higher T_int (higher T_int run first)
+  stitch_surface: true       # also stitch a flipping thin radiative gap above the surface
+
+fixed:
+  chemistry: constant
+  relative_humidity: 1.0
+  surface_pressure: 1.0e7  # dyn/cm^2 (10 bar)
+  toa_pressure: 1.0        # dyn/cm^2 (1e-6 bar)
+  planet: Earth            # label: g = 981 cm/s^2 from helios_inputs/param.dat
+
+grid:
+  internal_temp: [250, 200, 150, 125, 100, 75]   # K
+
+cases:
+  # --- reduced: H2 / CH4 / H2O; cold traps H2O, CH4 (+ trace) ---
+  - {atm: red, CplusO: 1.0e-2, CtoO: 0.59, trace: none, condensibles: "H2O,CH4"}
+  - {atm: red, CplusO: 1.0e-2, CtoO: 0.59, trace: H2S, trace_vmr: [1.0e-6, 1.0e-4],
+     condensibles: "H2O,CH4,H2S"}
+  - {atm: red, CplusO: 1.0e-2, CtoO: 0.59, trace: C2H2, trace_vmr: [1.0e-7, 1.0e-5],
+     condensibles: "H2O,CH4,C2H2"}
+  # --- oxidized: CO2 / N2 / H2O (<= 1 %); dry adiabat; cold traps H2O, CO2 (+ trace) ---
+  - {atm: ox, constant_mixing_ratios: {CO2: 0.891, N2: 0.099, H2O: 0.01},
+     trace: none, condensibles: "H2O,CO2"}
+  - {atm: ox, constant_mixing_ratios: {CO2: 0.891, N2: 0.099, H2O: 0.01},
+     trace: SO2, trace_vmr: [1.0e-6, 1.0e-4], condensibles: "H2O,CO2,SO2"}
+  - {atm: ox, constant_mixing_ratios: {CO2: 0.891, N2: 0.099, H2O: 0.01},
+     trace: N2O, trace_vmr: [3.0e-7, 1.0e-5], condensibles: "H2O,CO2,N2O"}
+
+stop_below_unconverged: internal_temp   # skip lower T_int of a composition once a higher one did not converge
+
+derive: [trace_gas_mixing]   # CplusO/CtoO (reduced) or constant_mixing_ratios + trace, trace_vmr -> constant_mixing_ratios

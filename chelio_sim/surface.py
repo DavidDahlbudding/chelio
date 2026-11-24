@@ -158,6 +158,31 @@ def fixed_inventory(species, p_inventory):
     return target
 
 
+def steam_floor(condensible, p_dry, t_from="boa"):
+    """
+    p_s = max(p_dry, p_sat,c(T_s)) [dyn/cm^2] (Innes et al. 2023, Sect. 3.1.4/3.2): the surface pressure stays at
+    p_dry until the bottom of the atmosphere is pure vapour, q(T_s, p_s) = 1; then the column is extended
+    downwards on the pure-vapour (dewpoint) curve, p_s = p_sat(T_s), without adding dry gas.
+    t_from: "boa" (T_s = HELIOS' BOA temperature T_lay[nlayer], i.e. T at p_s; default) or "layer0" (temperature of
+    the lowest layer, at p_lay[0] < p_s). Above the critical temperature (p_sat = inf) it raises (runaway).
+    """
+    from chelio_sim.thermo import Condensible
+    c = Condensible(condensible)
+    p0 = float(p_dry)
+    if t_from not in ("boa", "layer0"):
+        raise ValueError(f"t_from must be 'boa' or 'layer0', got {t_from!r}")
+
+    def target(state):
+        T_s = state.T_surf if t_from == "boa" else float(state.T_lay[0])
+        p_sat = float(c.p_sat(np.array([T_s]))[0])
+        if not np.isfinite(p_sat):
+            raise RuntimeError(f"steam_floor: T_s = {T_s:.1f} K is above the critical temperature of {condensible} "
+                               "(no ocean left: runaway)")
+        return max(p0, p_sat)
+    target.__qualname__ = f"steam_floor({condensible},{p0:g}dyn/cm2,T_s={t_from})"
+    return target
+
+
 def ocean_plus_inventory(condensible, p_inventory, rh=1.0, p_ocean=None):
     """
     p_s = p_inventory + min(RH p_sat,c(T_surf), p_ocean) [dyn/cm^2]: a dilute-limit ocean over a fixed background

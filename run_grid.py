@@ -113,7 +113,9 @@ def main():
         print("Restoring default CIA sources before starting...")
         grid.restore_default_cia()
 
-    status_names = {"done": [], "skipped": [], "failed": []}
+    status_names = {"done": [], "skipped": [], "failed": [], "not_run": []}
+    stop_axis = spec.get("stop_below_unconverged")
+    stopped_series = set()   # series_key of runs that failed / did not converge (stop_below_unconverged)
     timing_path = out_dir / "grid_timings.csv"
     if not timing_path.exists():
         timing_path.write_text("name,status,wall_time_s,finished\n")
@@ -128,7 +130,11 @@ def main():
             with grid.swapped_cia(source) if source else contextlib.nullcontext():
                 for task in group:
                     t_start = time.time()
-                    if session_runner is not None:
+                    series = grid.series_key(task, stop_axis) if stop_axis else None
+                    if series is not None and series in stopped_series:
+                        status, result = "not_run", None
+                        bar.write(f"NOT RUN: {task.name} (a higher {stop_axis} of this configuration did not converge)")
+                    elif session_runner is not None:
                         status, result = session_runner.run(task)
                         if status == "failed":
                             with open(failure_log, "a") as f:
@@ -150,13 +156,18 @@ def main():
                             bar.write(f"FAILED (exit code {result.returncode}): {task.name}, see {failure_log} and the run's run.log")
                         else:
                             bar.write(f"{status.upper()}: {task.name}")
+                    unconverged = status == "failed" or (
+                        status == "done" and isinstance(result, dict) and result.get("converged") is False)
+                    if series is not None and unconverged:
+                        stopped_series.add(series)
                     status_names[status].append(task.name)
                     with open(timing_path, "a") as f:
                         f.write(f"{task.name},{status},{time.time() - t_start:.1f},{datetime.datetime.now():%Y-%m-%dT%H:%M:%S}\n")
                     bar.update()
 
     print("\n--- Grid complete ---")
-    print(f"Completed: {len(status_names['done'])}, skipped (already existed): {len(status_names['skipped'])}, failed: {len(status_names['failed'])}")
+    print(f"Completed: {len(status_names['done'])}, skipped (already existed): {len(status_names['skipped'])}, failed: {len(status_names['failed'])}"
+          + (f", not run (higher {stop_axis} unconverged): {len(status_names['not_run'])}" if stop_axis else ""))
     if status_names["failed"]:
         print("\nFailed simulation names:")
         for name in status_names["failed"]:

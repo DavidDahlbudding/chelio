@@ -22,6 +22,8 @@ Grid file keys (see grids/README.md for the full description and grids/*.yaml fo
                 runner session: also "previous", "nearest" or "none" (session_runner.choose_warm_start)
   session       runner session only: settings of session_runner.SESSION_DEFAULTS (chemistry grid spacing,
                 iteration limits, stitching, warm_start, init_from)
+  stop_below_unconverged  optional, = the warm_start parameter: once a run fails or ends unconverged, the
+                lower values of that parameter with otherwise equal parameters are not run (status not_run)
 
 Parameters that the runner accepts as a CLI flag are passed as --<key> <value>, all others are
 labels that are only used in the name, for --only filters and by derive hooks.
@@ -62,7 +64,8 @@ RUNNER_FLAGS = {
 }
 # warm_start values of runner session that are modes, not a parameter name
 SESSION_WARM_START_MODES = ("none", "previous", "nearest")
-SPEC_KEYS = {"runner", "out_dir", "name", "config", "helios_param", "fixed", "grid", "cases", "derive", "warm_start", "session"}
+SPEC_KEYS = {"runner", "out_dir", "name", "config", "helios_param", "fixed", "grid", "cases", "derive", "warm_start", "session",
+             "stop_below_unconverged"}
 
 # Folder in $HELIOS_PATH/input/opacity/ with the CIA sources of CIA grids (`cia` key)
 CIA_SOURCE_DIR = "hitran_cia"
@@ -143,7 +146,16 @@ def load_grid(path):
         unknown = set(spec.get("session") or {}) - set(SESSION_DEFAULTS)
         if unknown:
             raise ValueError(f"unknown session settings {sorted(unknown)}; allowed: {sorted(SESSION_DEFAULTS)}")
+    stop_axis = spec.get("stop_below_unconverged")
+    if stop_axis and stop_axis != warm_start_axis(spec):
+        raise ValueError(f"stop_below_unconverged ({stop_axis!r}) must be the warm_start parameter "
+                         f"({warm_start_axis(spec)!r}): only that axis is run from high to low values")
     return spec
+
+
+def series_key(task, axis):
+    """Identifies the runs that differ only in `axis` (for stop_below_unconverged)."""
+    return tuple(sorted((key, repr(value)) for key, value in task.params.items() if key != axis))
 
 
 def warm_start_axis(spec):
@@ -451,6 +463,35 @@ def early_mars_mixing(params):
     params["constant_mixing_ratios"] = {"CO2": 1.0 - trace_vmr, "H2O": 1.0, params["trace_gas"]: trace_vmr, non_trace: 1e-30}
 
 
+def trace_gas_mixing(params):
+    """
+    Constant mixing ratios + one trace gas (labels `trace`: species or 'none', `trace_vmr`). If the label CplusO is
+    set, the base composition comes from c_plus_o_constant_mixing, otherwise from `constant_mixing_ratios`.
+    trace_vmr is the VMR relative to the dry gas (everything except H2O): the trace gas gets trace_vmr * (1 - x_H2O),
+    the other dry species are scaled by (1 - trace_vmr). So with a cold-trapped H2O base (e.g. H2O: 0.99 and
+    relative_humidity 1, the removed vapour goes to the other species in proportion) the trace gas ends up at
+    trace_vmr of the dry gas wherever it is not cold-trapped itself.
+    Name field: trace_name ('none' or e.g. 'SO2=1e-6').
+    """
+    if "CplusO" in params:
+        c_plus_o_constant_mixing(params)
+    x = {s: float(v) for s, v in params["constant_mixing_ratios"].items()}
+    trace = str(params.get("trace", "none"))
+    if trace.lower() in ("none", ""):
+        params["trace_name"] = "none"
+    else:
+        vmr = float(params["trace_vmr"])
+        if not 0 < vmr < 1:
+            raise ValueError(f"trace_vmr must be in (0, 1), got {vmr}")
+        if trace in x:
+            raise ValueError(f"trace gas {trace} is already in the base composition {x}")
+        dry = 1.0 - x.get("H2O", 0.0)
+        x = {s: (v if s == "H2O" else v * (1.0 - vmr)) for s, v in x.items()}
+        x[trace] = vmr * dry
+        params["trace_name"] = f"{trace}={_format_e_num(vmr)}"
+    params["constant_mixing_ratios"] = x
+
+
 def _format_e_num(num):
     """1e6 -> '1e6', 3.16e-3 -> '3.16e-3' (as `_format_e_nums` in analyze_modules/data_loader.py, keep in sync)."""
     text = f"{num:.2e}".replace("0", "").replace(".e", "e").replace("+", "")
@@ -547,4 +588,5 @@ DERIVE_HOOKS = {
     "cia_pair_mixing": cia_pair_mixing,
     "cloud_from_tau": cloud_from_tau,
     "early_mars_mixing": early_mars_mixing,
+    "trace_gas_mixing": trace_gas_mixing,
 }

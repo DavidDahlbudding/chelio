@@ -68,6 +68,13 @@ class ConvectionSettings:
     unfreeze         a layer that has been radiative for `adapt_interval` iterations with HELIOS' adaptive time-step
                      prefactor below 1e-5 (it decays while the layer is convective, so the layer is frozen) gets the
                      prefactor 1e-3 (as HELIOS does for all layers at iteration 6000)
+    pure_vapour      None (default) | threshold, e.g. 0.99: where a condensible's (cold-trapped) mole fraction is >= this,
+                     the layer is pure vapour: it counts as saturated even if superheated (x_sat > x), its target is
+                     the pure-vapour (dewpoint) adiabat ~ 1/xi, and Gamma = 0 there (no background gas left to form a
+                     mean-molecular-weight gradient, so no inhibition and no jump). For a steam layer below a
+                     background atmosphere (Innes et al. 2023: p_s = p_sat(T_s) once q(T_s, p_s) = 1; with
+                     surface.steam_floor). Without it, a pure-vapour layer is 'unsaturated' (x capped below 1) and
+                     follows the dry vapour adiabat, i.e. it superheats.
     max_adjust_iter  cap of the instability loop in convective_adjustment
     parcel_substeps  RK2 substeps per half layer for the target lapse rates
     """
@@ -83,6 +90,7 @@ class ConvectionSettings:
     inhibition_hysteresis: float = 0.02
     moist_tolerance: float = 1e-4
     unfreeze: bool = True
+    pure_vapour: Optional[float] = None
     max_adjust_iter: int = 1000
     parcel_substeps: int = 2
 
@@ -106,6 +114,8 @@ class ConvectionSettings:
                 raise ValueError(f"convection.{key} must be one of {allowed}, got {getattr(self, key)!r}")
         if self.inhibition_hysteresis < 0 or self.inhibition_hysteresis >= 1:
             raise ValueError("convection.inhibition_hysteresis must be in [0, 1)")
+        if self.pure_vapour is not None and not 0 < float(self.pure_vapour) < 1:
+            raise ValueError("convection.pure_vapour must be None or in (0, 1)")
         if not 0 < self.jump_width <= 2:
             raise ValueError("convection.jump_width must be in (0, 2] (ln p)")
         if not 0 <= self.moist_tolerance < 0.1:

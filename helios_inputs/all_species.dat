@@ -30,6 +30,14 @@ N2            no	          yes                file
 
 O2            no	          yes                file
 
+NO            yes             no                 file
+
+NO2           yes             no                 file
+
+N2O           yes             no                 file
+
+SO2           yes             no                 file
+
 CIA_H2H2      yes             no                 file
 
 CIA_H2He      yes             no                 file

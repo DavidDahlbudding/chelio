@@ -184,6 +184,9 @@ class ColumnModel:
         caps[:, self.cond] = np.minimum.accumulate(x_sat, axis=0)
         x = redistribute_capped(x, caps)
         sat = np.isfinite(x_sat) & (x[:, self.cond] >= (1 - 1e-9) * x_sat)
+        pv = self.settings.pure_vapour
+        if pv is not None:
+            sat |= x[:, self.cond] >= pv   # pure vapour: on the dewpoint adiabat even if superheated
         return x, x_sat, xi, sat
 
     def composition_profile(self, p_dyn, T):
@@ -274,6 +277,8 @@ class ColumnModel:
                 k_lay, k_int = self._targets(T_lay, p_lay, p_int, x_lay, sat_lay, self.x_avail[1::2], cp_s, cp)
             if K:
                 gamma = thermo.inhibition_gamma(x_lay[:, self.cond], xi_lay, sat_lay, self.M_c, mu)
+                if self.settings.pure_vapour is not None:   # no background gas left: no mu gradient
+                    gamma = np.where((x_lay[:, self.cond] >= self.settings.pure_vapour).any(axis=1), 0.0, gamma)
             else:
                 gamma = np.zeros(n)
             quant.kappa_lay = np.array(k_lay, quant.fl_prec)
@@ -328,10 +333,14 @@ class ColumnModel:
             # the comparison flips at rounding level and the target jumps (dry first RK stage)
             sat_c = x_sat <= x_c_tot * (1 + 1e-6)
             x_c = np.where(sat_c, x_sat, x_c_tot)
+            if pv is not None:
+                # pure vapour (convection.pure_vapour): saturated even if superheated, x_c stays at its total
+                sat_c = sat_c | (x_c_tot >= pv)
             x_a = np.clip(1.0 - x_c.sum(axis=1), 0.0, 1.0)
             return x_sat, xi, sat_c, x_c, x_a
 
         width = float(self.settings.jump_width)
+        pv = self.settings.pure_vapour
 
         def grad(lnT, lnp, x_c_tot):
             x_sat, xi, sat_c, x_c, x_a = state(lnT, lnp, x_c_tot)
@@ -344,7 +353,8 @@ class ColumnModel:
                 x_c_unsat = np.where(sat_c, 0.0, x_c)
                 with np.errstate(invalid="ignore", divide="ignore"):
                     M_unsat = (x_a * M_a + x_c_unsat @ M_c) / (x_a + x_c_unsat.sum(axis=1))
-                    w = np.where(sat_c, x_c * xi * (M_c[None, :] - M_unsat[:, None]), 0.0) / mu[:, None]
+                    sat_g = sat_c if pv is None else sat_c & ~(x_c >= pv).any(axis=1, keepdims=True)  # pure vapour: no jump
+                    w = np.where(sat_g, x_c * xi * (M_c[None, :] - M_unsat[:, None]), 0.0) / mu[:, None]
                 gam = np.nansum(w, axis=1)
                 dgam = np.nansum(w * xi, axis=1)  # dGamma/dlnT (x_sat ~ exp(int xi dlnT))
                 with np.errstate(invalid="ignore", divide="ignore"):

@@ -36,6 +36,9 @@ set per run in `grid` / `cases`, dicts are then merged into the session block's 
                             max_factor, settle (pressures in dyn/cm^2); the run parameter surface_pressure is
                             the starting value
   composition_damping       0 <= w < 1: log-VMR relaxation of the composition handed to HELIOS
+  grid_refinement           EXPERIMENTAL (chelio_sim/grid_refine.py): dict, refined layers above the BOA instead of
+                            HELIOS' uniform grid; nlayer is computed and overrides the param file; depth_dex auto =
+                            from the warm-start run's <name>_column.dat (two-pass use)
   vapour_supply             running_max (default: a decrease of a condensible's base VMR with height is taken as
                             condensation and redone by the cold trap) | saturated | base, see column.ColumnModel
 Per-run outputs (<out_dir>/<name>/): HELIOS output, <name>_tp_coupling_<i>.dat (T-P, bar/K, full precision,
@@ -56,7 +59,7 @@ import numpy as np
 import yaml
 
 from chelio_sim import abundances, chem_grid, mixfile_utils, run_modes, species as species_utils
-from chelio_sim import column, composition, convection, surface, thermo
+from chelio_sim import column, composition, convection, grid_refine, surface, thermo
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +92,8 @@ SESSION_DEFAULTS = {
     "surface_pressure_model": None,
     "composition_damping": 0.0,
     "vapour_supply": "running_max",
+    # EXPERIMENTAL: static refinement above the BOA (chelio_sim/grid_refine.py)
+    "grid_refinement": None,
 }
 # column-model settings that a run (grid / cases entry) may override; dicts are merged with the session block
 COLUMN_KEYS = ("chemistry_source", "vmr_callable", "vmr_callable_kwargs", "condensibles", "convection",
@@ -314,6 +319,10 @@ def run_task(session, name, out_dir, params, config, settings, init=None, echo=F
             "radiative_equilibrium_criterion": config["coupling"]["rad_eq_criterion"],
             **cloud_flags,
         }
+        refinement = grid_refine.resolve(settings.get("grid_refinement"), p_boa, p_toa,
+                                         init=str(init) if init else None)
+        if refinement is not None:
+            helios_params["number_of_layers"] = refinement["nlayer"]
         if init:
             log.info(f"Warm start from {init}")
         result = session.run(
@@ -323,6 +332,7 @@ def run_task(session, name, out_dir, params, config, settings, init=None, echo=F
             tp_coupling_every=settings["tp_coupling_every"],
             stitch_flip_limit=settings["stitch_flip_limit"], stitch_after_iter=settings["stitch_after_iter"],
             stitch_surface=settings["stitch_surface"], stitch_flip_start=settings["stitch_flip_start"],
+            grid_refinement=refinement,
         )
         if column_model is not None:
             write_vertical_mix(os.path.join(run_dir, "vertical_mix_0.dat"), column_model.species,

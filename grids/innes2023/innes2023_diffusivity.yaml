@@ -1,0 +1,26 @@
+# Sensitivity test for the Innes et al. (2023) reproduction: HELIOS diffusivity factor 1.66 (SOCRATES-like two-stream)
+# instead of 2 (param files *_diff1.66.dat). Otherwise as innes2023_{1,10}bar.yaml (jump-mode inhibition), cold start.
+runner: session
+out_dir: output/innes2023_diffusivity
+name: "P={psurf_bar}bar_S={S}"
+warm_start: none
+session:
+  chemistry_source: constant_exact
+  condensibles: [H2O]
+  convection: {criterion: ledoux, moist: true, inhibition: true, inhibition_mode: jump, pure_vapour: 0.99}
+  max_iter: 30000
+  rad_max_iter: 2000
+  cold_start_temperature: 300.0
+fixed:
+  chemistry: constant
+  constant_mixing_ratios: {H2: 8.5502e-5, He: 1.4498e-5, H2O: 0.9999}
+  active_species: "H2O,H2,He"
+  relative_humidity: 1.0
+  toa_pressure: 1.0
+  surface_albedo: 0.12
+  internal_temp: 30
+cases:
+  - {S: 300, surface_pressure: 1.0e6, helios_param_file: grids/innes2023/param_S300_n120_diff1.66.dat}
+  - {S: 400, surface_pressure: 1.0e6, helios_param_file: grids/innes2023/param_S400_n120_diff1.66.dat}
+  - {S: 60, surface_pressure: 1.0e7, helios_param_file: grids/innes2023/param_S60_n140_diff1.66.dat}
+  - {S: 70, surface_pressure: 1.0e7, helios_param_file: grids/innes2023/param_S70_n140_diff1.66.dat}

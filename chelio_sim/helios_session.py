@@ -62,6 +62,8 @@ import time
 
 import numpy as np
 
+from chelio_sim import grid_refine
+
 from chelio_sim import convection
 
 log = logging.getLogger(__name__)
@@ -389,13 +391,51 @@ def _make_compute_class(h):
             super().__init__()
             self.session = session
 
+        # chelio (EXPERIMENTAL grid_refinement): HELIOS' temp_inter kernel assumes equal spacing; on a refined grid
+        # interface temperatures are interpolated linearly in ln p on the host (identical on a uniform grid)
+        def interpolate_temperatures(self, quant):
+            if getattr(quant, "chelio_grid_refinement", None) is None:
+                return super().interpolate_temperatures(quant)
+            n = quant.nlayer
+            T = np.array(quant.dev_T_lay.get()[:n], float)
+            T_int = grid_refine.interface_temperatures(T, np.asarray(quant.p_lay, float), np.asarray(quant.p_int, float))
+            quant.dev_T_int.set(T_int.astype(quant.fl_prec))
+
         # chelio: hook into HELIOS' (unchanged) radiation loop, which calls this once per iteration (from
         # iteration `foreplay` on) with the temperatures of the current iteration on the device
         def rad_temp_iteration(self, quant):
             every = self.session._run_opts.get("tp_coupling_every") or 0
             if every and quant.iter_value % every == 0:
                 self.session._write_tp_coupling(quant, quant.chelio_reader)
-            super().rad_temp_iteration(quant)
+            with self._pseudo_step_grid(quant):
+                super().rad_temp_iteration(quant)
+
+        def conv_temp_iteration(self, quant):
+            with self._pseudo_step_grid(quant):
+                super().conv_temp_iteration(quant)
+
+        # chelio (EXPERIMENTAL grid_refinement): HELIOS' pseudo-time step (kernels rad_temp_iter / conv_temp_iter,
+        # physical_tstep 0) scales EVERY layer's step with p_lay[0] / (p_int[0] - p_int[1]), i.e. with the BOA layer
+        # thickness. A refined BOA layer would make all steps ~rho_fine / rho_base times larger (oscillations). The
+        # kernels get a copy of p_int whose second entry gives the base grid's BOA layer thickness instead (only the
+        # pseudo-time branch reads p_int[0] - p_int[1]; the physical-timestep branch is not used by the session).
+        @contextlib.contextmanager
+        def _pseudo_step_grid(self, quant):
+            ref = getattr(quant, "chelio_grid_refinement", None)
+            if ref is None or not ref.get("pseudo_step_base", False) or quant.physical_tstep != 0:
+                yield
+                return
+            dev = getattr(quant, "chelio_dev_p_int_step", None)
+            if dev is None:
+                p = np.array(quant.p_int, float)
+                p[1] = p[0] * 10.0 ** (-1.0 / ref["rho_base"])
+                dev = quant.chelio_dev_p_int_step = gpuarray.to_gpu(p.astype(quant.fl_prec))
+            real = quant.dev_p_int
+            quant.dev_p_int = dev
+            try:
+                yield
+            finally:
+                quant.dev_p_int = real
 
         # chelio: device-cached species opacities (stock: re-uploaded every call, i.e. every 10th iteration)
         def calculate_total_opacity_and_scat_cross_sections_from_species(self, quant):
@@ -480,7 +520,9 @@ def _make_compute_class(h):
             p_int_old = np.array(quant.dev_p_int.get(), float)
             k0 = float(quant.kappa_int[0])
             quant.p_boa = fl(p_new)
-            p_lay, p_int = (np.array(a, float) for a in hsfunc.calculate_pressure_levels(quant))
+            ref = getattr(quant, "chelio_grid_refinement", None)
+            levels = grid_refine.levels_for(quant, ref) if ref else hsfunc.calculate_pressure_levels(quant)
+            p_lay, p_int = (np.array(a, float) for a in levels)
 
             lp_old = np.log(p_lay_old)
             T_new = np.interp(np.log(p_lay)[::-1], lp_old[::-1], T[:n][::-1])[::-1]
@@ -497,6 +539,7 @@ def _make_compute_class(h):
             quant.delta_col_lower = ((p_int[:-1] - p_lay) / quant.g).astype(fl)
             for name in ("p_lay", "p_int", "delta_colmass", "delta_col_upper", "delta_col_lower"):
                 getattr(quant, "dev_" + name).set(getattr(quant, name))
+            quant.chelio_dev_p_int_step = None  # pseudo-time-step grid of grid_refinement, rebuilt on next use
             quant.T_lay = np.append(T_new, T_surf).astype(fl)
             quant.dev_T_lay.set(quant.T_lay)
             quant.conv_layer = conv_new
@@ -946,7 +989,7 @@ class HeliosSession:
     def run(self, params, vmr_provider=None, vmr_species=None, init=None, cold_start_temperature=COLD_START_TEMPERATURE,
             min_conv_iter=HELIOS_MIN_CONV_ITER, rad_max_iter=None, write_tp_every=0, tp_coupling_every=0,
             stitch_flip_limit=STITCH_FLIP_LIMIT, stitch_after_iter=HELIOS_STITCH_AFTER_ITER, stitch_surface=False,
-            stitch_flip_start=STITCH_FLIP_START, column_model=None):
+            stitch_flip_start=STITCH_FLIP_START, column_model=None, grid_refinement=None):
         """
         One HELIOS model. `params`: HELIOS command-line options (e.g. name, output_directory, parameter_file,
         boa_pressure, internal_temperature, path_to_species_file, kappa_file_path, maximum_number_of_iterations).
@@ -966,6 +1009,8 @@ class HeliosSession:
             the run are deleted at the start.
         stitch_flip_limit, stitch_after_iter, stitch_surface, stitch_flip_start: StitchPolicy (stitch_flip_limit None and
             stitch_after_iter 5000 = HELIOS)
+        grid_refinement: EXPERIMENTAL, resolved grid_refine settings (grid_refine.resolve) or None: refined layers
+            above the BOA instead of HELIOS' uniform log-p grid (number_of_layers must be passed in params)
         Returns a dict with convergence, iteration counts, timings, the final profile and stitching info,
         also written to <output_directory>/<name>/<name>_session.json.
         """
@@ -1024,6 +1069,19 @@ class HeliosSession:
                 h.hsfunc.planet_param(keeper, reader)
                 h.hsfunc.set_up_numerical_parameters(keeper)
                 h.hsfunc.construct_grid(keeper)
+                keeper.chelio_grid_refinement = grid_refinement
+                if grid_refinement is not None:
+                    if int(keeper.nlayer) != int(grid_refinement["nlayer"]):
+                        raise ValueError(f"grid_refinement needs number_of_layers {grid_refinement['nlayer']}, got {keeper.nlayer}")
+                    p_lay, p_int = grid_refine.levels_for(keeper, grid_refinement)
+                    keeper.p_lay, keeper.p_int = list(p_lay), list(p_int)
+                    keeper.delta_colmass = list((p_int[:-1] - p_int[1:]) / keeper.g)
+                    keeper.delta_col_upper = list((p_lay - p_int[1:]) / keeper.g)
+                    keeper.delta_col_lower = list((p_int[:-1] - p_lay) / keeper.g)
+                    result["grid_refinement"] = grid_refinement
+                    log.info(f"EXPERIMENTAL grid refinement: {grid_refinement['rho_fine']:g} layers/dex in the lowest "
+                             f"{grid_refinement['depth_dex']:.3f} dex, {grid_refinement['rho_base']:g} elsewhere, "
+                             f"nlayer {keeper.nlayer} ({grid_refinement['source']})")
                 h.hsfunc.initial_temp(keeper, reader)
                 warm_conv = self._set_initial_temperature(keeper, init_state, cold_start_temperature)
                 result["warm_start_exact_grid"] = warm_conv is not None

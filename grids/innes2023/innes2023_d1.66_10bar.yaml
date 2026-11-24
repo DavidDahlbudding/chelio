@@ -1,0 +1,51 @@
+# Diffusivity factor 1.66 (SOCRATES-like, Innes et al.) instead of HELIOS' 2: param files *_d1.66.dat.
+# Innes et al. (2023, ApJ 953, 168) "The Runaway Greenhouse Effect on Hycean Worlds": 10 bar H2-He over a water ocean, G star.
+#   Sun (HELIOS/star_tool/output/sun.h5, 1361.2 W/m^2 at 1 AU) at a = sqrt(1361.17 / S) AU, f = 0.25, Earth g and radius,
+#   surface albedo 0.12, T_int = 30 K, TOA 1e-6 bar, 20 layers per dex (140 layers; param files from make_param_files.py).
+#   Composition: solar H2-He (He mass fraction 0.25188 -> x_He / x_H2 = 0.14498 / 0.85502) over an ocean: base VMR
+#   H2O = 0.9999, capped at saturation (RH = 1) by the cold trap; removed vapour goes to H2/He in proportion.
+#   Opacities: H2O k-table (no MT_CKD continuum, unlike the paper), CIA H2-H2 + H2-He, Rayleigh H2, He, H2O.
+#   Convection: Ledoux, moist pseudoadiabat, condensation inhibition (Leconte+2017, experimental, jump mode).
+#   Surface pressure: 10 bar until q(T_s, p_s) = 1, then p_s = p_sat(T_s) (pure steam below), T_s = BOA temperature (T at p_s)
+#   (chelio_sim.surface:steam_floor); p_max = 220 bar (critical pressure of water).
+#   Runs go up in S, each warm-started from the previous one (as in the paper).
+# Run from the chelio root:  python3 run_grid.py grids/innes2023/innes2023_d1.66_10bar.yaml
+runner: session
+out_dir: output/innes2023_d1.66_10bar
+name: "S={S}"
+warm_start: previous
+session:
+  chemistry_source: constant_exact
+  condensibles: [H2O]
+  convection: {criterion: ledoux, moist: true, inhibition: true, inhibition_mode: jump, pure_vapour: 0.99}
+  surface_pressure_model: {callable: "chelio_sim.surface:steam_floor",
+                           kwargs: {condensible: H2O, p_dry: 1.0e7, t_from: boa},
+                           update_every: 200, relax: 0.5, tol: 1.0e-3, p_max: 2.2e8}
+  max_iter: 30000
+  rad_max_iter: 2000
+  stitch_after_iter: 1000   # HELIOS: 5000; 10 bar runs had layers flipping until then (2026-11-21)
+  stitch_flip_limit: 30     # default 100 (counted from iteration 100)
+  cold_start_temperature: 300.0
+
+fixed:
+  chemistry: constant
+  constant_mixing_ratios: {H2: 8.5502e-5, He: 1.4498e-5, H2O: 0.9999}
+  active_species: "H2O,H2,He"
+  relative_humidity: 1.0
+  toa_pressure: 1.0         # dyn/cm^2 (= 1e-6 bar)
+  surface_pressure: 1.0e7   # dyn/cm^2: start value
+  surface_albedo: 0.12
+  internal_temp: 30
+
+cases:
+  - {S: 50, helios_param_file: grids/innes2023/param_S50_n140_d1.66.dat}
+  - {S: 55, helios_param_file: grids/innes2023/param_S55_n140_d1.66.dat}
+  - {S: 60, helios_param_file: grids/innes2023/param_S60_n140_d1.66.dat}
+  - {S: 65, helios_param_file: grids/innes2023/param_S65_n140_d1.66.dat}
+  - {S: 70, helios_param_file: grids/innes2023/param_S70_n140_d1.66.dat}
+  - {S: 75, helios_param_file: grids/innes2023/param_S75_n140_d1.66.dat}
+  - {S: 80, helios_param_file: grids/innes2023/param_S80_n140_d1.66.dat}
+  - {S: 85, helios_param_file: grids/innes2023/param_S85_n140_d1.66.dat}
+  - {S: 90, helios_param_file: grids/innes2023/param_S90_n140_d1.66.dat}
+  - {S: 95, helios_param_file: grids/innes2023/param_S95_n140_d1.66.dat}
+  - {S: 100, helios_param_file: grids/innes2023/param_S100_n140_d1.66.dat}
