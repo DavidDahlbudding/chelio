@@ -1,0 +1,43 @@
+# Rerun of the H2S series of grids/trace_gases_10bar.yaml (same out_dir, names and settings). In the first run the
+# H2S runs (cold start at 250 K, then warm starts from the H2S run at the next-higher T_int) ended with the surface
+# layer running away to HELIOS' 1 K state (red_..._Tint=250_H2S=1e-4, red_..._Tint=200_H2S=1e-6), and the lower T_int
+# were not run. Here every H2S run starts from the converged reduced baseline at the same T_int (warm_start: nearest;
+# the baselines are already finished and only skipped). Unconverged runs are never used for warm starts.
+# Cause of the failures (local tests 2026-11-25, grids/test_h2s_diag*.yaml): H2S cools the upper atmosphere by ~60 K
+# (far-IR rotational band at ~1e-5 bar, where H2-H2 CIA is negligible), which converges slowly and keeps a radiative
+# layer unconverged; the surface ghost layer had become radiative (subadiabatic after the zone warmed), and HELIOS
+# drives a radiative surface below a convective zone by the net flux at the first unconverged radiative layer above
+# (conv_temp_iter), so T_surf drifted with a growing time step to 1 K. attach_surface keeps the surface in the
+# convective zone (test D: converged, T_surf = 642.66 K vs. baseline 641.4 K at T_int = 200 K, H2S 1e-6).
+#
+# Run from the chelio root:  python3 run_grid.py grids/trace_gases_10bar_h2s.yaml [--dry-run]
+# Slurm:                     GRID=grids/trace_gases_10bar_h2s.yaml sbatch chelio/test_slurm/trace_gases_10bar.sbatch
+runner: session
+out_dir: output/trace_gases_10bar
+name: "{atm}_P0={psurf_bar}bar_Tint={internal_temp}_{trace_name}"
+
+session:
+  chemistry_source: constant_exact
+  convection: {criterion: schwarzschild, moist: false, inhibition: false}   # dry adiabat (JANAF c_p), all cases
+  max_iter: 15000
+  warm_start: nearest        # converged run closest in T_int etc. = the reduced baseline at the same T_int
+  stitch_surface: true       # also stitch a flipping thin radiative gap above the surface
+  attach_surface: true       # keep the surface in the convective zone (fix for the surface runaway to 1 K)
+
+fixed:
+  chemistry: constant
+  relative_humidity: 1.0
+  surface_pressure: 1.0e7  # dyn/cm^2 (10 bar)
+  toa_pressure: 1.0        # dyn/cm^2 (1e-6 bar)
+  planet: Earth            # label: g = 981 cm/s^2 from helios_inputs/param.dat
+
+grid:
+  internal_temp: [250, 200, 150, 125, 100, 75]   # K
+
+cases:
+  # baselines (finished, skipped; warm-start sources) and the H2S runs
+  - {atm: red, CplusO: 1.0e-2, CtoO: 0.59, trace: none, condensibles: "H2O,CH4"}
+  - {atm: red, CplusO: 1.0e-2, CtoO: 0.59, trace: H2S, trace_vmr: [1.0e-6, 1.0e-4],
+     condensibles: "H2O,CH4,H2S"}
+
+derive: [trace_gas_mixing]   # CplusO/CtoO (reduced) or constant_mixing_ratios + trace, trace_vmr -> constant_mixing_ratios

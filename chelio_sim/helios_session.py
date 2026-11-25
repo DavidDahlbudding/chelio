@@ -265,13 +265,21 @@ class StitchPolicy:
     after_iter:   HELIOS' rule: fill all thin gaps after this many convection-loop iterations (None: never)
     surface:      also fill a flipping thin gap between the surface and the lowest convective zone. HELIOS never
                   fills that gap (a radiative layer above the surface can be real); by default it is only reported.
+    attach_surface: keep the surface ghost layer in the convective zone whenever the lowest layer is convective
+                  (2026-11-25). A radiative surface under a convective zone is not driven by its own energy balance in
+                  HELIOS' conv_temp_iter but by the net flux at the first unconverged radiative layer anywhere above
+                  ("avoiding taking convective layers as net flux driver"); while such a layer stays unconverged (e.g.
+                  a slowly relaxing upper atmosphere) T_surf drifts with a growing adaptive time step and collapses to
+                  HELIOS' 1 K state (trace-gas grid, H2S runs).
     """
 
-    def __init__(self, nlayer, flip_limit=STITCH_FLIP_LIMIT, after_iter=HELIOS_STITCH_AFTER_ITER, surface=False, flip_start=STITCH_FLIP_START):
+    def __init__(self, nlayer, flip_limit=STITCH_FLIP_LIMIT, after_iter=HELIOS_STITCH_AFTER_ITER, surface=False, flip_start=STITCH_FLIP_START,
+                 attach_surface=False):
         self.flip_limit = flip_limit
         self.flip_start = flip_start
         self.after_iter = after_iter
         self.surface = surface
+        self.attach_surface = attach_surface
         self.flips = np.zeros(nlayer + 1, int)
         self.previous = None
         self.latched = set()       # layers (HELIOS indices, nlayer = surface) that reached flip_limit
@@ -327,6 +335,12 @@ class StitchPolicy:
                 self.helios_rule_active = True
             _ORIGINAL["stitching"](quant)
             self._record(quant, before, f"iter>{self.after_iter}")
+            before = np.array(quant.conv_layer, int)
+
+        n = quant.nlayer
+        if self.attach_surface and quant.conv_layer[0] == 1 and quant.conv_layer[n] == 0:
+            quant.conv_layer[n] = 1
+            self._record(quant, before, "attach_surface")
             before = np.array(quant.conv_layer, int)
 
         if not self.latched:
@@ -989,6 +1003,7 @@ class HeliosSession:
     def run(self, params, vmr_provider=None, vmr_species=None, init=None, cold_start_temperature=COLD_START_TEMPERATURE,
             min_conv_iter=HELIOS_MIN_CONV_ITER, rad_max_iter=None, write_tp_every=0, tp_coupling_every=0,
             stitch_flip_limit=STITCH_FLIP_LIMIT, stitch_after_iter=HELIOS_STITCH_AFTER_ITER, stitch_surface=False,
+            attach_surface=False,
             stitch_flip_start=STITCH_FLIP_START, column_model=None, grid_refinement=None):
         """
         One HELIOS model. `params`: HELIOS command-line options (e.g. name, output_directory, parameter_file,
@@ -1097,7 +1112,8 @@ class HeliosSession:
                 keeper.copy_host_to_device()
                 keeper.allocate_on_device()
 
-                keeper.chelio_stitch = StitchPolicy(keeper.nlayer, stitch_flip_limit, stitch_after_iter, stitch_surface, stitch_flip_start)
+                keeper.chelio_stitch = StitchPolicy(keeper.nlayer, stitch_flip_limit, stitch_after_iter, stitch_surface, stitch_flip_start,
+                                                    attach_surface=attach_surface)
                 keeper.chelio_fogger = fogger
                 keeper.chelio_reader = reader
                 keeper.chelio_column = column_model

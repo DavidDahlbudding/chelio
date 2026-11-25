@@ -9,7 +9,9 @@ Settings (grid file `session:` block, defaults in SESSION_DEFAULTS; also `sessio
   rad_max_iter              cold start: cap of the radiation-only loop, then convection loop (default max_iter)
   cold_start_temperature    isothermal start [K] (HELIOS / run_coupled.py: 500 K)
   min_conv_iter             minimum convection-loop iterations (HELIOS: 400)
-  stitch_flip_limit, stitch_flip_start, stitch_after_iter, stitch_surface: helios_session.StitchPolicy
+  stitch_flip_limit, stitch_flip_start, stitch_after_iter, stitch_surface, attach_surface: helios_session.StitchPolicy
+                            (attach_surface: keep the surface in the convective zone whenever the lowest layer is
+                            convective; avoids the surface runaway to 1 K, see StitchPolicy)
   write_tp_every            intermediate T-P profiles every n iterations (0: none)
   tp_coupling_every         write <name>_tp_coupling_<i>.dat every n iterations of the radiation and of the
                             convection loop (default 100, 0: only the final profile); i = radiation + convection
@@ -78,6 +80,7 @@ SESSION_DEFAULTS = {
     "stitch_flip_limit": 100,
     "stitch_after_iter": 5000,
     "stitch_surface": False,
+    "attach_surface": False,
     "stitch_flip_start": 100,
     "write_tp_every": 0,
     "tp_coupling_every": 100,
@@ -332,6 +335,7 @@ def run_task(session, name, out_dir, params, config, settings, init=None, echo=F
             tp_coupling_every=settings["tp_coupling_every"],
             stitch_flip_limit=settings["stitch_flip_limit"], stitch_after_iter=settings["stitch_after_iter"],
             stitch_surface=settings["stitch_surface"], stitch_flip_start=settings["stitch_flip_start"],
+            attach_surface=settings["attach_surface"],
             grid_refinement=refinement,
         )
         if column_model is not None:
@@ -385,20 +389,22 @@ def choose_warm_start(mode, task, tasks, out_dir, completed):
     """
     Restart file to start `task` from, or None.
       previous  last converged run of this invocation
-      nearest   run of this grid (with a restart file) closest in the numeric run parameters that differ
+      nearest   converged run of this grid closest in the numeric run parameters that differ
                 (log10 for positive parameters spanning more than a decade, each scaled by its range)
-      <param>   run with the next-higher value of <param>, all other run parameters equal
+      <param>   converged run with the next-higher value of <param>, all other run parameters equal
+    Unconverged runs are never used (their restart file can hold a broken state).
     """
     if mode in (None, "none", False):
         return None
     if mode == "previous":
         for name in reversed(completed):
             path = restart_file(out_dir, name)
-            if path:
+            if path and is_done(out_dir, name):
                 return path
         return None
 
-    candidates = [t for t in tasks if t.name != task.name and restart_file(out_dir, t.name)]
+    # only converged runs (is_done): an unconverged run's restart file can hold a broken state (e.g. HELIOS' 1 K failure)
+    candidates = [t for t in tasks if t.name != task.name and restart_file(out_dir, t.name) and is_done(out_dir, t.name)]
     if not candidates:
         return None
     if mode == "nearest":
